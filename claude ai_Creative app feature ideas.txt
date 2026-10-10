@@ -1,0 +1,34 @@
+Here are ideas that stay within the lab's constraints (local, Ollama + Qwen, SQLite, FSM) but go beyond the rubric:
+
+**Smarter agent behavior**
+- **Hallucination guard layer:** validate every item name the LLM mentions against `menu_items` (fuzzy match), and auto-correct or reject before it reaches the customer. Log "blocked hallucinations" as a visible stat.
+- **Allergen safety interlock:** when a customer says "I'm allergic to nuts," store it in session state and automatically warn or block any later item that conflicts, even after 10 turns.
+- **Smart substitutions:** if an item is out of stock, the agent proposes the closest in-stock alternative (same category, similar price, compatible allergens).
+- **Ambiguity handling:** "the burger" with 3 burgers on the menu triggers a clarifying question instead of a guess.
+- **Taglish / multilingual ordering:** Qwen handles Filipino-English mixing well ("dalawang cheeseburger, walang sibuyas"). Great demo for a PH campus.
+
+**FSM and engineering depth**
+- **Visual FSM debugger:** a live state diagram (Mermaid or a small canvas) that highlights the current state and shows transition history.
+- **Undo/redo stack:** every cart change is an event, so "wait, undo that" works reliably. This is basically event sourcing.
+- **Guarded transitions:** REVIEW → CONFIRMED only allowed if cart is non-empty, stock still available, and the customer explicitly said yes (not just any "ok").
+- **Back-transitions:** from REVIEW, "actually add a drink" cleanly returns to TAKING_ORDER without losing the cart.
+- **Stock race handling:** re-check stock inside a SQLite transaction at confirmation, so two tables can't buy the last item.
+
+**Wow-factor features**
+- **Voice mode:** local STT (Whisper / faster-whisper) plus TTS (Piper) for a fully offline voice waiter.
+- **Budget mode:** "I have 300 pesos, build me a meal" makes the agent do constrained selection from live prices.
+- **Dietary profile shortcuts:** "make it vegetarian" re-evaluates the whole cart and flags or swaps non-vegetarian items.
+- **Upsell with restraint:** suggest a drink or dessert once, based on what's in the cart and what's actually in stock.
+- **Kitchen display screen:** a second web page showing incoming confirmed orders in real time, which makes it feel like a complete system.
+- **Multi-table simulation:** run Tables 1 to 5 at once with separate sessions, proving your session isolation works.
+
+**Evaluation and polish (these impress graders)**
+- **Automated test suite:** a script of 20+ scripted conversations (edge cases, out-of-stock, removing non-existent items) with a pass/fail report.
+- **Tool-call trace panel:** show each tool call, its arguments, and the SQL result next to the chat.
+- **Metrics dashboard:** tool-call accuracy, average latency, hallucinations blocked.
+- **Digital receipt with QR code** and the service fee calculation from the mockup.
+- **Recovery from malformed tool calls:** if Qwen emits bad JSON, retry with a corrective prompt instead of crashing.
+
+**If you only pick three:** the allergen safety interlock, the hallucination guard with a visible trace panel, and the automated test suite. They hit three rubric rows (tool calling, robustness, state memory) at the "Exemplary" level, and they're easy to demo.
+
+Want help sketching the architecture or the FSM transition table for any of these?
