@@ -1,138 +1,139 @@
-# Shared Phase 4 AI reliability
+# Shared Phase 4 AI reliability — PR #7 follow-up
 
-Base: latest main `ea303ae1c920bb2d244e6b5dccdd0496f7754a16` (flexible model
-selection merged). This fix is independent of model size. It changes the shared
-AI boundary, not the FSM, SQLite services, migrations, inventory rules, receipts,
-installer, Windows launchers, or browser dashboard. No Phase 5 work is included.
+This update stays on `bugfix/model-agnostic-ai-reliability` and updates the existing
+draft PR #7. Its main baseline is `ea303ae1c920bb2d244e6b5dccdd0496f7754a16`.
+It changes the shared AI boundary and acceptance tests. The FSM, transactions,
+SQLite schema/data, receipts, menu/allergen/stock services, model preferences,
+installer, Windows launchers, and dashboard remain intact. No Phase 5 work.
 
 ## Root cause
 
-The old model-facing `add_item_to_order` and `view_current_order` schemas required
-`session_id`, and confirmation required a model-supplied review token. Python's
-dispatcher correctly rejected a made-up session ID, but the schema invited the
-model to invent it. The old tool loop also required rigid final `reply`/`facts`
-JSON to acknowledge an action already committed by SQLite. Invalid follow-up
-output returned an application error without explaining the saved cart, leaving
-the user uncertain whether an order had changed. Equivalent serialized arguments,
-fenced JSON, and other valid envelopes were not handled consistently.
+The first PR #7 fix removed model ownership of protected identifiers, but left
+three defects: the pending request was cleared immediately after session binding;
+the loop had no completion ledger linking a requested addition to its successful
+tool result; and every tool batch still required a subsequent model-generated
+JSON acknowledgement. Consequently `view_current_order` could replace the food
+addition, and an empty follow-up then failed JSON parsing. Error status counted
+any successful tool, including a read-only cart view, as partial order success.
 
-The Windows raw-response/error log was not supplied, so the precise subsequent
-response shape cannot be identified. These boundary defects are reproduced with
-controlled outputs, including the reported fake-session + invalid-follow-up path.
-No claim is made that the fix was run against a real Qwen model here.
+The shared prompt mixed native tool routing with required final JSON. It asked
+for a fragile, unnecessary acknowledgement after a saved action. We can reproduce
+that protocol failure with controlled native, empty, malformed and structured
+responses. Without the raw Ollama trace or real execution here, we cannot prove
+why a particular Qwen run emitted empty content (template/runtime/intent behavior).
+The fix removes that unnecessary inference step, rather than requiring a model to
+produce perfect prose. No size-specific behavior, model switch or download is used.
 
 ## Behavior and safeguards
 
-- New model-facing intent schemas omit session/database IDs and review tokens.
-  Item/portion intent uses exact menu names and current customization text.
-  Python resolves these against SQLite; ambiguous portions require clarification.
-- Python binds/resolves a session using the customer's explicit table number.
-  Missing, conflicting, negated, or invalid table references prompt/return clear
-  feedback instead of guessing. Bare numbers are accepted only after asking for
-  the table. English/Filipino number words 1–10 following table/mesa and explicit
-  numeric references are recognized. An initial ordering request is retained
-  while asking for the table and sent once after the binding is established.
-- The adapter accepts native tools with object/serialized JSON arguments, fenced
-  JSON, structured `calls`/`tool_calls`, single calls, and call arrays. Exact
-  integer strings can be normalized, but booleans/fractions are not quantities.
-  Duplicate keys, unexpected fields, unknown tools, invented items, invalid
-  references, prices, inventory/state overrides, and ungrounded prose are rejected.
-- Native tools fall back only when Ollama explicitly reports them unsupported.
-  Saved structured mode gets schemas from its first request. Both transports use
-  the same parser, identifier binding, strict dispatcher and FSM.
-- Legacy model-supplied session/token strings are discarded; Python supplies the
-  current binding and prior-review token. Legacy menu/line references are accepted
-  only if present in authoritative menu/current-customer cart data. They never
-  authorize another session or create a database identity. The direct trusted
-  dispatcher retains its existing strict validation and session isolation.
-- Entire batches are normalized/validated before effects, including duplicate
-  detection. Canonical per-turn fingerprints survive corrective retries, so a
-  repeated call with a different fabricated ID cannot repeat a saved mutation.
-  Failed schema output has bounded retries (existing default one, maximum two).
-  Timeouts do not automatically replay actions. Distinct tools retain existing
-  per-action transactions: a later business-rule failure can leave an earlier
-  action saved, which is reported explicitly.
-- Customer-visible acknowledgements are generated from Python tool results and
-  the current SQLite cart/receipt. A malformed/empty/timed-out model follow-up
-  cannot suppress the successful action's real quantity, total, or receipt.
-  Saved actions are reported separately from the failed follow-up; no AI prose
-  is used to invent results. If a database read itself fails, recorded tool
-  messages are shown with a warning to inspect saved results before retrying.
-- Checkout still needs direct customer consent and a previously displayed review.
-  Python owns the token. Edits and any new review in the same turn revoke that
-  turn's confirmation permission. The FSM still rejects changed carts, invalid
-  state, cancelled orders, and duplicate inventory deductions.
+- A pending request survives the table question and remains outstanding until a
+  matching validated tool succeeds. Python binds table/session deterministically.
+  `Dalawang Chicken Adobo po.` + `Table 3 po.` gives the model the original request,
+  authoritative table context and an explicit outstanding-addition goal.
+- Completion tracking recognizes only full unconditional quantity + exact menu
+  name clauses, simple menu requests, and conjunctions of those clauses. Quantity
+  digits and common English/Filipino words are supported. Tracking never executes
+  tools. A model must still propose a valid matching action through the original
+  strict dispatcher, stock checks and FSM. Wrong quantities, changed instructions
+  and unrelated mutations cannot substitute for a recognized addition.
+- Ambiguous, conditional or customized requests retained across a table question
+  require restatement. A table answer containing changed intent also requires
+  restatement. A correction before the table answer replaces the earlier request.
+  These restrictions prevent old history from silently authorizing an addition.
+  Complex requests in an already-bound conversation still use model intent and
+  the existing validators. Clear addition intent cannot be fulfilled by a read.
+- Successful tools produce authoritative Python/SQLite acknowledgements immediately.
+  Further inference is allowed only for known outstanding operations, with the
+  existing call/retry bounds and per-turn duplicate fingerprints. A read preceding
+  an outstanding addition may lead to another inference; a finished addition does
+  not need another inference solely to say it succeeded. A rejected action stops
+  with the actual failure and unfinished-request feedback; it is not blindly retried.
+- Native tool calls, serialized arguments and structured JSON use the same parser,
+  identity binding and strict dispatch. Fenced JSON, single calls, arrays and
+  `calls`/`tool_calls` envelopes remain supported. Unsupported native tools switch
+  to structured mode. Invalid/empty output can use the bounded corrective retry
+  in structured mode, with explicit schemas and only unfinished work requested.
+  Fallback normalizes saved native call/result history to structured JSON data,
+  avoiding a mixed native-tool/JSON conversation protocol.
+  No output can bypass argument validation or replay a previous action.
+- A cart view followed by empty/non-JSON output reports an incomplete order,
+  names the addition that was NOT executed, and reports `partial_success=false`.
+  Saved mutations remain visible if another part fails. Raw model prose cannot
+  invent an acknowledgement or suppress saved quantities, totals or receipts.
+- Session IDs, database identities, prices, inventory, order state and review
+  tokens remain Python-owned. Checkout still requires direct consent and a
+  previously displayed review. Same-turn review/edits revoke confirmation permission.
+  Allergen, customization, stock, cancellation and receipt rules remain in the FSM.
 
-## Backward compatibility
+## API and backward compatibility
 
-Existing direct dispatcher/FSM/service contracts, persisted data, model preferences,
-terminal CLI, installer and launchers are retained. No application model size is
-hardcoded by this fix. Existing tests were not removed, edited, weakened, or given
-new skip conditions.
+Existing result fields remain. `partial_success=true` now means a successful
+**order mutation** plus an incomplete turn; read-only actions and establishing or
+reviewing a session do not qualify. `order_mutation_succeeded` explicitly reports
+whether a successful mutation occurred, including on wholly successful turns.
+`snapshot.pending_request` exposes the retained text. Successful tools use
+`source=application_results`; genuine grounded model clarifications retain
+`source=ollama`; Python prompts and errors remain explicitly labeled.
 
-The AI result object retains `ok`, `response`, `source`, `inference_verified`,
-`tools`, and `snapshot`, and adds `partial_success`. `ok=false` still means the
-whole turn was incomplete/failed; `partial_success=true` says at least one tool
-succeeded and the authoritative acknowledgement is in `response`/`tools`.
-Consumers must inspect this before asking a customer to repeat a request.
-Successful action acknowledgements use `source=application_results`; genuine
-model-only grounded clarifications keep `source=ollama`; errors keep
-`source=application_error`. Pre-inference table prompts are explicitly labeled
-`application_prompt`, never simulated model inference.
+Callers must not blindly replay a partially completed request. Pending text is
+never automatically replayed on later unrelated turns. The pre-session request
+and its live completion tracker are process-local; bound messages/results and
+clarification questions remain in existing SQLite conversation memory. Restarting
+the process does not automatically execute a historical request.
 
 ## Automated validation
 
-Full suite: `.venv/bin/python -m unittest discover -s tests -q`.
-**179 tests run: 178 passed, one existing PowerShell simulation skipped because
-PowerShell is unavailable.** No new skips were introduced. All 146 baseline tests
-are preserved unchanged. New model behaviors are mocked; SQLite/session/order/
-receipt operations and the local HTTP dashboard regression are real on Linux.
+Run `.venv/bin/python -m unittest discover -s tests -q`.
+**197 tests: 196 passed, one pre-existing PowerShell simulation skipped because
+PowerShell is unavailable.** No new skip or removal was introduced. Existing
+follow-up fault tests now use a genuinely unresolved multipart request, retaining
+mutation-count, duplicate, timeout, grounding and transaction assertions. Tests
+that previously demanded an acknowledgement call now assert that it is absent.
 
-New regressions cover the reported failure under three model labels, protected
-identities absent from schemas, string arguments/quantities, JSON envelopes,
-nullable Ollama fields, duplicate keys, empty/malformed recovery, bounded retries,
-unsupported native tools, configured structured transport, fabricated sessions,
-item/allergen/stock tools, ambiguous portions, table prompting/resolution,
-duplicate calls, timeouts, partial business-rule success, feedback read failure,
-review tokens/direct consent, same-turn review/edit guards, and the acceptance
-script itself with mocked inference and a real disposable SQLite database.
+All AI/model responses in this environment are **mocked**. SQLite/FSM, transaction,
+receipt, inventory and local HTTP regressions use real disposable data on Linux.
+The exact Windows sequence is reproduced with a successful read followed by empty
+responses, including incorrect status prevention. Further cases cover native-to-
+structured recovery, unsupported native tools, non-JSON claims, incorrect quantity,
+ambiguous/changed retained intent, timeouts, partial additions, no replay on later
+reads, model labels 3B/7B/14B/custom, and the acceptance script's failure reporting.
 
-## Repeatable Windows acceptance with real installed models
+Modified files for this follow-up: `bistro/ai_engine.py`, `bistro/ai_protocol.py`,
+new `bistro/ai_request.py`, `scripts/verify_phase4.py`,
+`tests/test_ai_reliability.py`, `tests/test_phase4.py`, new
+`tests/test_pending_ai_request.py`, and this document.
 
-1. Run `setup.bat` normally. Start Ollama. Use `configure_ai.bat` and `ai_chat.bat`
-   for the selected model as usual. Model preference changes remain explicit.
-2. In a terminal in the extracted project folder, run the optional test for an
-   **already installed** exact tag (examples below; any compatible tag is allowed):
+## Repeatable real Windows acceptance
 
-   ```bat
-   .venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:3b
-   .venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:7b
-   .venv\Scripts\python.exe scripts\verify_phase4.py --model YOUR_INSTALLED_QWEN_TAG --transport structured
-   ```
+Run normal `setup.bat`, start Ollama, and use `configure_ai.bat`/`ai_chat.bat` for
+normal operation. No reinstall, preference change or forced model download is
+required by this fix. For group leads, run the optional acceptance against each
+**already installed** exact Qwen2.5 tag:
 
-3. The script creates/deletes a temporary database, asks for a table without
-   inference, then exercises `Dalawang Chicken Adobo po.`, table 3, total, review,
-   withholding consent, and explicit confirmation. It checks two portions only,
-   the actual total, the persisted receipt, and stock deducted exactly once only
-   after consent. It never downloads a model or changes preferences/real inventory.
-4. Record the tag, Ollama version, Windows version, RAM/VRAM, selected transport,
-   output, and exit code for each model. `--transport native` chooses native first
-   and may fall back if explicitly unsupported. The final report shows transport.
-   A PASS with degraded-follow-up warnings verifies saved actions/feedback, not
-   flawless model responses. Inspect warnings; never blindly replay the request.
-5. For manual fault checks, stop Ollama during a follow-up, then restart it and
-   inspect `state`. A saved addition must remain exactly two portions. Request a
-   fresh review before confirmation after any edit. Try ambiguous customization,
-   out-of-stock amounts, and an unrelated message during review; no checkout may
-   occur without direct consent.
+```bat
+.venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:3b
+.venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:7b
+.venv\Scripts\python.exe scripts\verify_phase4.py --model YOUR_INSTALLED_QWEN_TAG --transport structured
+```
 
-**Remaining limitations:** real Windows and real Qwen/Ollama execution have not
-been performed in this environment. Language/intent interpretation is still
-model-dependent; valid schemas cannot guarantee perfect intent accuracy. Tables
-are local session bindings, not authentication; ambiguous existing sessions need
-trusted local resume controls. Unbound pending requests last for that process,
-while bound conversation history remains persisted. The backend reports partial
-success rather than promising cross-tool atomicity. Model-only free-form facts
-remain blocked, and some final responses can still exhaust retries; completed
-actions remain visible through authoritative feedback. Browser ordering/chat
-remains unimplemented.
+Any compatible Qwen2.5 size/tag uses the same backend. `--transport native` starts
+native but may fall back; output reports the actual final transport. The script
+creates/deletes a temporary database and never changes real orders/inventory,
+model preferences or downloads. It performs the exact two-turn sequence, total,
+review, withholding consent, and explicit confirmation. It checks exactly two
+portions, authoritative feedback, receipt and inventory deduction only once after
+consent. Every incomplete turn fails acceptance, even if another mutation succeeded;
+a read-only cart result cannot pass the addition step.
+
+Record exact model tag, Ollama/Windows versions, RAM/VRAM, command, output and exit
+code. For manual fault testing, stop Ollama while **unfinished** work remains,
+restart it and inspect the cart. Never replay saved additions to repair prose.
+Repeat customization, allergen queries, out-of-stock requests and unrelated messages
+during review; checkout must still require direct consent.
+
+**Unverified/limitations:** real Windows and Qwen/Ollama execution are unavailable
+here. Passing schema/installer smoke tests does not guarantee language quality.
+The completion grammar is deliberately conservative; retained complex/conditional
+requests need restatement. Multi-tool operations retain per-action transactions,
+not cross-tool atomicity. Table bindings are local session controls, not customer
+authentication. Browser ordering/AI chat remain unimplemented.

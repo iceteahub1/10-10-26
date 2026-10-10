@@ -92,9 +92,9 @@ class Phase4Tests(unittest.TestCase):
         observed = []
         def model(messages, *args, **kwargs):
             observed.append(json.loads(json.dumps(messages)))
-            return calls(self.add_call()) if len(observed) == 1 else reply()
+            return calls(self.add_call()) if len(observed) == 1 else calls(call('browse_menu'))
         self.client.chat.side_effect = model
-        result = self.ai.respond('Add two Chicken Adobo')
+        result = self.ai.respond('Add two Chicken Adobo and show the menu')
         self.assertTrue(result['ok'])
         feedback = next(m for m in observed[1] if m['role'] == 'tool')
         self.assertEqual(json.loads(feedback['content'])['data']['total'], '370.00')
@@ -169,7 +169,7 @@ class Phase4Tests(unittest.TestCase):
         self.assertEqual(self.agent.context()['order']['items'], [])
 
     def test_repeated_mutation_not_retried(self):
-        result = self.run_model('add', calls(self.add_call()), calls(self.add_call()))
+        result = self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), calls(self.add_call()))
         self.assertFalse(result['ok'])
         self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
 
@@ -186,7 +186,7 @@ class Phase4Tests(unittest.TestCase):
 
     def test_invalid_final_response_does_not_replay_mutation(self):
         bad = {'role': 'assistant', 'content': 'not json'}
-        self.assertFalse(self.run_model('add', calls(self.add_call()), bad, bad)['ok'])
+        self.assertFalse(self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), bad, bad)['ok'])
         self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
 
     def test_failed_database_operation(self):
@@ -245,7 +245,7 @@ class Phase4Tests(unittest.TestCase):
     def test_stale_fact_after_edit_blocked(self):
         self.add()
         bad = reply(facts=['Total: PHP 370.00.'])
-        self.assertFalse(self.run_model('add', calls(self.add_call()), bad, bad)['ok'])
+        self.assertFalse(self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), bad, bad)['ok'])
         self.assertEqual(self.agent.context()['order']['total'], '740.00')
 
 

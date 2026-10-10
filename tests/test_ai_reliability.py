@@ -53,16 +53,17 @@ class ReliabilityTests(unittest.TestCase):
                 client = Mock(model=model)
                 client.chat.side_effect = [native(self.add(session_id='made-up-session')), {'content':'not JSON'}, MalformedResponse('empty')]
                 result = AIWaiter(agent=agent, client=client).respond('Dalawang Chicken Adobo po.')
-                self.assertFalse(result['ok'])  # Turn incomplete, but its saved action is reported.
-                self.assertTrue(result['partial_success'])
+                self.assertTrue(result['ok'])  # Completed action needs no model acknowledgement.
+                self.assertFalse(result['partial_success'])
+                self.assertTrue(result['order_mutation_succeeded'])
                 self.assertIn('2 × Chicken Adobo', result['response'])
                 self.assertIn('Total: PHP 370.00.', result['response'])
-                self.assertIn('remain saved', result['response'])
+                self.assertEqual(result['source'], 'application_results')
                 self.assertEqual(agent.context()['order']['items'][0]['quantity'],2)
                 self.assertNotEqual(agent.session_id,'made-up-session')
                 with connection(db) as con:
                     self.assertEqual(con.execute('SELECT COUNT(*) FROM table_sessions').fetchone()[0],1)
-                self.assertEqual(client.chat.call_count,3)
+                self.assertEqual(client.chat.call_count,1)
 
     def test_protected_identifiers_absent_from_advertised_intents(self):
         for tool in INTENT_TOOLS:
@@ -108,7 +109,7 @@ class ReliabilityTests(unittest.TestCase):
         result = self.respond('add two',{},native(self.add()),{'content':'```json\n{"reply":"Thank you!"}\n```'})
         self.assertTrue(result['ok'])
         self.assertEqual(self.cart()['items'][0]['quantity'],2)
-        self.assertEqual(self.client.chat.call_count,3)
+        self.assertEqual(self.client.chat.call_count,2)
 
     def test_all_malformed_message_shapes_fail_bounded_without_crash(self):
         malformed = [None,[],{'content':'[]'}, {'content':'{"calls":[]}'}, {'tool_calls':[None]},
@@ -180,7 +181,8 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(unbound.agent.context()['table_no'],8)
         self.assertEqual(unbound.agent.context()['order']['items'][0]['quantity'],2)
         self.assertIn('Dalawang Chicken Adobo',json.dumps(unbound._context()['history']))
-        self.assertIn('Dalawang Chicken Adobo',self.client.chat.call_args_list[0].args[0][-1]['content'])
+        self.assertIn('Dalawang Chicken Adobo', next(m['content'] for m in self.client.chat.call_args_list[0].args[0] if m['role']=='user'))
+        self.assertEqual(self.client.chat.call_count,1)
 
     def test_table_reply_numeric_and_quantity_never_guessed_as_table(self):
         self.assertIsNone(customer_table('two Chicken Adobo'))
@@ -224,7 +226,7 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(unbound.agent.context()['table_no'],9)
 
     def test_repeated_calls_with_changing_fake_ids_not_replayed(self):
-        result=self.respond('add',native(self.add(session_id='fakeA')),native(self.add(session_id='fakeB')))
+        result=self.respond('Add two Chicken Adobo and show the menu',native(self.add(session_id='fakeA')),native(self.add(session_id='fakeB')))
         self.assertFalse(result['ok'])
         self.assertTrue(result['partial_success'])
         self.assertEqual(self.cart()['items'][0]['quantity'],2)
@@ -236,7 +238,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(self.cart()['items'],[])
 
     def test_saved_action_then_timeout_is_reported_once(self):
-        result=self.respond('add',native(self.add()),OllamaError('model timed out'))
+        result=self.respond('Add two Chicken Adobo and show the menu',native(self.add()),OllamaError('model timed out'))
         self.assertFalse(result['ok'])
         self.assertTrue(result['partial_success'])
         self.assertIn('2 × Chicken Adobo',result['response'])
@@ -291,9 +293,9 @@ class ReliabilityTests(unittest.TestCase):
             captured.append(json.loads(json.dumps(messages)))
             if len(captured)==1:
                 return native({'name':'add_item_to_order','arguments':json.dumps({'item_name':'Chicken Adobo','qty':2,'session_id':'fake'})})
-            return final()
+            return native(intent('browse_menu'))
         self.client.chat.side_effect=output
-        self.assertTrue(self.ai.respond('add two')['ok'])
+        self.assertTrue(self.ai.respond('Add two Chicken Adobo and show the menu')['ok'])
         history=next(m for m in captured[1] if m['role']=='assistant')
         args=history['tool_calls'][0]['function']['arguments']
         self.assertIsInstance(args,dict)
@@ -344,16 +346,29 @@ class AcceptanceScriptTests(unittest.TestCase):
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
         import verify_phase4
         client=Mock(model='qwen2.5:14b')
-        client.chat.side_effect=[native(intent('add_item_to_order',item_name='Chicken Adobo',qty=2)),final(),
-                                 native(intent('view_current_order')),final(),
-                                 native(intent('request_review')),final(),
-                                 native(intent('view_current_order')),final(),
-                                 native(intent('confirm_order',confirmed=True)),final()]
+        client.chat.side_effect=[native(intent('add_item_to_order',item_name='Chicken Adobo',qty=2)),
+                                 native(intent('view_current_order')),
+                                 native(intent('request_review')),
+                                 native(intent('view_current_order')),
+                                 native(intent('confirm_order',confirmed=True))]
         with patch.object(verify_phase4,'OllamaClient',return_value=client) as create, patch('sys.stdout',new_callable=io.StringIO) as output:
             self.assertEqual(verify_phase4.main(['--model','qwen2.5:14b','--transport','structured']),0)
         self.assertEqual(create.call_args.args[1],'qwen2.5:14b')
         self.assertIn('transport=structured',output.getvalue())
-        self.assertIn('degraded follow-ups=0',output.getvalue())
+        self.assertIn('incomplete turns=0',output.getvalue())
+        self.assertEqual(client.chat.call_count,5)  # No acknowledgement-only requests.
+
+    def test_acceptance_rejects_read_then_empty_instead_of_pending_addition(self):
+        import sys
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        import verify_phase4
+        client=Mock(model='qwen2.5:3b')
+        client.chat.side_effect=[native(intent('view_current_order')), {'content':''}, {'content':''}]
+        with patch.object(verify_phase4,'OllamaClient',return_value=client), patch('sys.stdout',new_callable=io.StringIO) as output:
+            self.assertEqual(verify_phase4.main(['--model','qwen2.5:3b']),1)
+        self.assertIn('was NOT added',output.getvalue())
+        self.assertIn('Customer request incomplete',output.getvalue())
+        self.assertNotIn('PASS: Real',output.getvalue())
 
 if __name__=='__main__':
     unittest.main()

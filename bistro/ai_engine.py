@@ -8,7 +8,8 @@ from bistro import conversation_store as memory, order_service as orders
 from bistro.database import connection
 from bistro.ollama_client import OllamaClient, OllamaError, MalformedResponse, ToolsUnsupported
 from bistro.tool_schemas import dispatch
-from bistro.ai_protocol import INTENT_TOOLS, parse_response, bind_intent, model_call, public_context, customer_table
+from bistro.ai_protocol import INTENT_TOOLS, parse_response, bind_intent, model_call, public_context, customer_table, transport_messages
+from bistro.ai_request import MUTATIONS, RequestProgress, request_goals, table_answer_only
 from fsm_agent import ConversationAgent, STATE_REVIEW, STATE_CONFIRMED, STATE_CANCELLED
 
 PROMPT = '''You are Perpetual Bistro's local waiter. Help in English, Filipino or Taglish matching the customer.
@@ -20,9 +21,10 @@ Python exclusively owns session IDs, menu/cart database IDs, review tokens, pric
 Only request_review displays a review. Never review and confirm in the same customer turn.
 Confirmation needs explicit customer consent and a prior displayed review; Python supplies the protected token and an edit invalidates it.
 When tools fail, explain the actual failure, never claim success. Stay on restaurant topics.
-Python acknowledges completed actions directly from saved results, even if your next response fails.
+Python acknowledges completed actions directly from saved results. Do not generate a final acknowledgement after tools.
 Never repeat already executed calls. Use another tool only when the original request needs it.
-For a final clarification or acknowledgement, factual output is rendered by the application from SQLite:
+An outstanding request is not fulfilled by viewing a cart. Complete the requested operation, or ask a clarification.
+For a clarification when no tool can safely complete the request, factual output is rendered by the application from SQLite:
 return JSON {"reply":"your friendly question or acknowledgement", "facts":["exact evidence string", ...]}.
 reply must be copied from the application's allowed_replies list. All questions that mention food must use the exact database-derived choices.
 reply must contain no factual assertions about menu, quantities, prices, allergens, actions or checkout.
@@ -70,6 +72,32 @@ class AIWaiter:
         self.awaiting_table = False
         self.pending_request = None
 
+    @staticmethod
+    def _mutations_succeeded(traces):
+        return any(t['result']['ok'] and t['call']['name'] in MUTATIONS for t in traces)
+
+    def _set_pending_question(self, question):
+        if self.agent.session_id:
+            with connection(self.agent.db_path, write=True) as con:
+                stored = memory.load(con, self.agent.session_id)['context']
+                stored['pending_question'] = question
+                con.execute('UPDATE conversation_sessions SET context_json=? WHERE session_id=?',
+                            (memory.encode(stored), self.agent.session_id))
+
+    def _completed_response(self, traces, progress):
+        """No model call is needed to explain Python's completed tool batch."""
+        response = self._action_feedback(traces)
+        if progress.remaining:
+            response += '\n' + progress.incomplete_feedback()
+        ok = all(t['result']['ok'] for t in traces)
+        self._record('assistant', {'text': response, 'mode': 'application_results'})
+        self._set_pending_question(None)
+        self.last_error = None
+        return {'ok': ok, 'response': response, 'source': 'application_results',
+                'inference_verified': True, 'partial_success': not ok and self._mutations_succeeded(traces),
+                'order_mutation_succeeded': self._mutations_succeeded(traces),
+                'tools': traces, 'snapshot': self.snapshot()}
+
     def _record(self, role, content):
         if self.agent.session_id:
             with connection(self.agent.db_path, write=True) as con:
@@ -83,6 +111,7 @@ class AIWaiter:
         review = context.get('review')
         token = hashlib.sha256(memory.encode(review).encode()).hexdigest() if review else None
         return {**context, 'review_token': token, 'pending_actions': list(self.pending_actions),
+                'pending_request': self.pending_request,
                 'connection_error': self.last_error, 'model': self.client.model,
                 'receipt': context.get('order') if context.get('order', {}).get('status') == 'checked_out' else None}
 
@@ -119,6 +148,7 @@ class AIWaiter:
 
     def _respond(self, text):
         traces, inferred = [], False
+        progress = RequestProgress(None)
         try:
             if not isinstance(text, str) or not text.strip() or len(text) > 10000:
                 raise ValueError('Enter a message of 1–10000 characters.')
@@ -131,8 +161,9 @@ class AIWaiter:
             if self.agent.session_id is None or (table is not None and self.agent.state in (STATE_CONFIRMED, STATE_CANCELLED)):
                 if table is None:
                     self.awaiting_table = True
-                    if self.pending_request is None:
-                        self.pending_request = text
+                    # A correction while waiting replaces the earlier intent;
+                    # never execute stale food requests from conversation history.
+                    self.pending_request = text
                     response = 'What is your table number? No order changes have been made.'
                     self._record('assistant', {'text': response, 'mode': 'application_prompt'})
                     return {'ok': True, 'response': response, 'source': 'application_prompt',
@@ -145,14 +176,28 @@ class AIWaiter:
                 self.greeting_history.clear()
                 self.awaiting_table = False
                 if self.pending_request:
-                    text = self.pending_request + '\nCustomer supplied table number: ' + str(table) + '. ' + text
-                    self.pending_request = None
+                    retained = self.pending_request
+                    menu = orders.browse_menu(db_path=self.agent.db_path)
+                    goals = request_goals(retained, menu)
+                    if not table_answer_only(text) or goals is None:
+                        self.pending_request = None
+                        response = ('Table ' + str(table) + ' is established. No order changes have been made. '
+                                    'Please restate your food request, including quantities and any conditions or special instructions, '
+                                    'so I do not act on an ambiguous or changed earlier request.')
+                        self._record('assistant', {'text': response, 'mode': 'application_prompt', 'retained_request': retained})
+                        return {'ok': True, 'response': response, 'source': 'application_prompt',
+                                'inference_verified': False, 'partial_success': False,
+                                'order_mutation_succeeded': False, 'tools': [], 'snapshot': self.snapshot()}
+                    # Keep the retained request until its validated tool action
+                    # succeeds. It is context, never an automatic dispatch/replay.
+                    text = retained
             elif table is not None and table != self.agent.context()['table_no']:
                 raise ValueError('This conversation is already bound to another table. Finish/cancel it and use the trusted terminal session controls to start a new customer.')
             context = self._context()
             review_token = context.get('review_token')
             can_confirm = bool(CONFIRM.fullmatch(text)) and context['state'] == STATE_REVIEW
             menu = orders.browse_menu(db_path=self.agent.db_path)
+            progress = RequestProgress.from_text(text, menu)
             # Grounded facts are immutable exact strings. Qwen chooses which to present.
             evidence = factual_strings(menu)
             if 'order' in context:
@@ -167,12 +212,15 @@ class AIWaiter:
             messages = [{'role': 'system', 'content': PROMPT},
                         {'role': 'system', 'content': memory.encode(public_context({'context': context, 'menu': menu, 'evidence': evidence, 'allowed_replies': allowed_replies}))},
                         {'role': 'user', 'content': text}]
+            if progress.recognized:
+                messages.insert(2, {'role': 'system', 'content': 'Outstanding customer request (not executed): ' + memory.encode(progress.remaining) + '. Only successful matching actions complete it; read-only cart views do not fulfill additions.'})
             if self.structured:
                 messages.insert(1, {'role': 'system', 'content': 'Use structured calls JSON. Schemas: ' + memory.encode(INTENT_TOOLS)})
             seen, attempts, calls_used = set(), 0, 0
             while True:
                 try:
-                    msg = self.client.chat(messages, None if self.structured else INTENT_TOOLS, structured=self.structured)
+                    msg = self.client.chat(transport_messages(messages, structured=self.structured),
+                                           None if self.structured else INTENT_TOOLS, structured=self.structured)
                     inferred = True
                     intents, parsed = parse_response(msg)
                     if len(intents) > self.max_calls - calls_used:
@@ -185,6 +233,7 @@ class AIWaiter:
                         raise ValueError('Repeated tool calls in one batch are blocked.')
                     if seen.intersection(fingerprints):
                         raise OllamaError('Repeated tool call blocked; no duplicate mutation executed.')
+                    progress.validate(calls)
                     if not calls:
                         if parsed and 'reply' in parsed and 'facts' not in parsed:
                             parsed['facts'] = []
@@ -200,21 +249,28 @@ class AIWaiter:
                         pending = parsed.get('pending_question')
                         if pending is not None and (not isinstance(pending, str) or pending != reply or not reply.endswith('?')):
                             raise ValueError('Invalid pending clarification.')
+                        if progress.remaining and (traces or any(g['name'] in MUTATIONS for g in progress.remaining)):
+                            if pending is None:
+                                raise ValueError('The requested operations remain unfinished; return the outstanding tool intent or ask an explicit clarification.')
+                            response = (self._action_feedback(traces) + '\n' if traces else '') + progress.incomplete_feedback() + '\n' + reply
+                            self._record('assistant', {'text': response, 'mode': 'application_prompt', 'pending_question': pending})
+                            self._set_pending_question(pending)
+                            return {'ok': False, 'response': response, 'source': 'application_prompt',
+                                    'inference_verified': True, 'partial_success': self._mutations_succeeded(traces),
+                                    'order_mutation_succeeded': self._mutations_succeeded(traces),
+                                    'tools': traces, 'snapshot': self.snapshot()}
                         response = '\n'.join([reply, *parsed['facts']]).strip()
                         if not response:
                             raise ValueError('Empty reply.')
                         if traces:
                             response = self._action_feedback(traces) + ('\n' + reply if reply else '')
                         self._record('assistant', {'text': response, 'mode': 'application_results' if traces else 'ollama', 'pending_question': pending})
-                        if self.agent.session_id:
-                            with connection(self.agent.db_path, write=True) as con:
-                                stored = memory.load(con, self.agent.session_id)['context']
-                                stored['pending_question'] = pending
-                                con.execute('UPDATE conversation_sessions SET context_json=? WHERE session_id=?', (memory.encode(stored), self.agent.session_id))
+                        self._set_pending_question(pending)
                         self.last_error = None
                         return {'ok': all(t['result']['ok'] for t in traces), 'response': response,
                                 'source': 'application_results' if traces else 'ollama', 'inference_verified': True,
-                                'partial_success': any(t['result']['ok'] for t in traces) and any(not t['result']['ok'] for t in traces),
+                                'partial_success': self._mutations_succeeded(traces) and any(not t['result']['ok'] for t in traces),
+                                'order_mutation_succeeded': self._mutations_succeeded(traces),
                                 'tools': traces, 'snapshot': self.snapshot()}
                 except ToolsUnsupported:
                     if self.structured:
@@ -226,6 +282,9 @@ class AIWaiter:
                     if attempts >= self.retries:
                         raise OllamaError('Invalid model output: ' + str(exc)) from exc
                     attempts += 1
+                    if not self.structured:
+                        self.structured = True
+                        messages.append({'role': 'system', 'content': 'Use structured JSON for the remaining request only. Schemas: ' + memory.encode(INTENT_TOOLS)})
                     messages.append({'role': 'system', 'content': 'Correct your output. No new tool actions executed from that response. Do not repeat any earlier tool calls; their saved results are in this conversation. Error: ' + str(exc)})
                     continue
                 history_calls = [model_call(call, menu=menu, cart=self.agent.context().get('order', {}).get('items', [])) for call in calls]
@@ -251,11 +310,18 @@ class AIWaiter:
                         can_confirm = False
                     self.pending_actions.pop(0)
                     traces.append({'call': call, 'result': result})
+                    progress.completed(call, result)
                     self._record('assistant', {'tool_trace': traces[-1], 'mode': 'ollama'})
                     evidence.append(result['message'])
                     if result.get('data') is not None:
                         evidence.extend(factual_strings(public_context(result['data'])))
                     messages.append({'role': 'tool', 'tool_name': call['name'], 'content': memory.encode(public_context(result))})
+                # Completed or rejected actions are acknowledged from SQLite.
+                # Inference continues ONLY for a known outstanding operation.
+                if not progress.remaining or any(not t['result']['ok'] for t in traces):
+                    if not progress.remaining and self.pending_request == text:
+                        self.pending_request = None
+                    return self._completed_response(traces, progress)
                 # Remove stale factual evidence after changes; refresh authoritative menu/cart.
                 current = self._context()
                 evidence = factual_strings(orders.browse_menu(db_path=self.agent.db_path))
@@ -265,6 +331,7 @@ class AIWaiter:
                 if traces[-1]['result'].get('data') is not None and 'items' not in (traces[-1]['result']['data'] if isinstance(traces[-1]['result']['data'], dict) else {}):
                     evidence.extend(factual_strings(public_context(traces[-1]['result']['data'])))
                 messages.append({'role': 'system', 'content': 'Current evidence strings: ' + memory.encode(evidence) + '. Current context: ' + memory.encode(public_context(self._context()))})
+                messages.append({'role': 'system', 'content': 'Unfinished customer request: ' + memory.encode(progress.remaining) + '. Do not acknowledge or repeat completed actions. Return only intents needed for this unfinished request, or a clarification.'})
         except (OllamaError, ValueError, TypeError, KeyError, AttributeError, IndexError, OSError, RuntimeError, sqlite3.Error) as exc:
             self.pending_actions = []
             self.last_error = str(exc)
@@ -272,10 +339,13 @@ class AIWaiter:
                 feedback = self._action_feedback(traces) if traces else 'No new order changes were made.'
             except (ValueError, TypeError, KeyError, OSError, RuntimeError, sqlite3.Error):
                 feedback = '\n'.join(t['result']['message'] for t in traces) + '\nThe current cart could not be reloaded. Check saved tool results before retrying.'
-            if any(t['result']['ok'] for t in traces):
+            if self._mutations_succeeded(traces):
                 feedback += '\nCompleted actions above remain saved. The AI follow-up failed; those actions were not replayed.'
+            if progress.remaining:
+                feedback += '\n' + progress.incomplete_feedback()
             result = {'ok': False, 'response': feedback + '\n' + str(exc), 'source': 'application_error',
-                      'partial_success': any(t['result']['ok'] for t in traces),
+                      'partial_success': self._mutations_succeeded(traces),
+                      'order_mutation_succeeded': self._mutations_succeeded(traces),
                       'inference_verified': inferred, 'tools': traces}
             try:
                 self._record('assistant', result)

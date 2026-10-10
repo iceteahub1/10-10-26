@@ -47,13 +47,18 @@ def decode_json(text):
     if not isinstance(text, str) or len(text) > 2_000_000:
         raise ValueError('Invalid JSON text.')
     text = text.strip()
+    if not text:
+        raise ValueError('Empty model response; no new tool intent was received.')
     if text.startswith('```'):
         match = re.fullmatch(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', text, re.I)
         if not match:
             raise ValueError('Malformed JSON fence.')
         text = match[1].strip()
-    return json.loads(text, object_pairs_hook=_pairs,
-                      parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Non-finite JSON value.')))
+    try:
+        return json.loads(text, object_pairs_hook=_pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Non-finite JSON value.')))
+    except json.JSONDecodeError as exc:
+        raise ValueError('Model response was not valid structured JSON; no new tool intent was received.') from exc
 
 def _call(value):
     if type(value) is not dict:
@@ -95,6 +100,28 @@ def parse_response(message):
     if 'name' in value or 'function' in value:
         return [_call(value)], None
     return [], value
+
+
+def transport_messages(messages, *, structured):
+    """Keep a fallback request in one protocol, including saved tool history.
+
+    Native assistant/tool envelopes belong to Ollama's tool template. Structured
+    routing uses JSON calls/results as data instead; no historical call executes.
+    """
+    if not structured:
+        return messages
+    result = []
+    for message in messages:
+        if message.get('role') == 'assistant' and message.get('tool_calls'):
+            result.append({'role': 'assistant', 'content': json.dumps(
+                {'calls': [_call(call) for call in message['tool_calls']]}, ensure_ascii=False)})
+        elif message.get('role') == 'tool':
+            result.append({'role': 'user', 'content': json.dumps({
+                'saved_tool_result': decode_json(message['content']),
+                'tool_name': message['tool_name']}, ensure_ascii=False)})
+        else:
+            result.append(message)
+    return result
 
 def _integer(value):
     # JSON integer strings are equivalent; floats and booleans remain invalid.

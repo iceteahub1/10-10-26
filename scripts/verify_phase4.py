@@ -23,7 +23,6 @@ def main(argv=None):
     model = args.model or settings.model
     client = OllamaClient(settings.ollama_url, model, os.getenv('BISTRO_OLLAMA_TIMEOUT', '120'))
     print(f'REAL OLLAMA ACCEPTANCE: {model}. No model downloads, preference changes, or real restaurant data access.')
-    warnings = 0
     with tempfile.TemporaryDirectory(prefix='bistro-real-qwen-') as folder:
         db = Path(folder) / 'validation.db'
         initialize_database(db)
@@ -44,14 +43,17 @@ def main(argv=None):
         for text, expected in steps:
             result = engine.respond(text)
             print(json.dumps({'customer': text, 'result': result}, ensure_ascii=True, indent=2))
-            # Preserve the API's distinction between a completed action and a failed
-            # model follow-up. Never rerun a customer request to repair prose.
-            if not result['ok'] and not result.get('partial_success'):
-                print('FAIL: No verified action completed. Inspect the feedback; do not replay saved mutations.')
-                return 1
+            # An incomplete turn is a failure even when another mutation was
+            # saved. A read-only result must never pass as partial order success.
             if not result['ok']:
-                warnings += 1
-                print('WARNING: AI follow-up incomplete; checking the saved Python results instead. No request replayed.')
+                print('FAIL: Customer request incomplete. Inspect authoritative feedback; do not replay saved mutations.')
+                return 1
+            if result.get('partial_success') or result['source'] != 'application_results':
+                print('FAIL: Expected authoritative completion, without a required model acknowledgement.')
+                return 1
+            if expected == 'add' and not result.get('order_mutation_succeeded'):
+                print('FAIL: A read-only action did not fulfill the pending food addition.')
+                return 1
             context = agent.context()
             cart = context['order']
             if context['table_no'] != 3 or not (len(cart['items']) == 1 and cart['items'][0]['name'] == 'Chicken Adobo' and cart['items'][0]['quantity'] == 2):
@@ -70,7 +72,7 @@ def main(argv=None):
             if orders.check_stock(1, db_path=db)['stock_qty'] != expected_stock:
                 print('FAIL: Inventory changed before consent or was deducted more than once.')
                 return 1
-        print(f'PASS: Real {model} acceptance; transport={"structured" if engine.structured else "native"}; degraded follow-ups={warnings}. Disposable data removed.')
+        print(f'PASS: Real {model} acceptance; transport={"structured" if engine.structured else "native"}; incomplete turns=0. Disposable data removed.')
         return 0
 
 
