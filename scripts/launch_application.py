@@ -1,4 +1,4 @@
-"""Launch the Phase 1 dashboard with bounded readiness and owned-process cleanup."""
+"""Launch the browser ordering dashboard with bounded readiness and owned-process cleanup."""
 import argparse
 import hashlib
 import json
@@ -57,7 +57,7 @@ def main():
             except (RuntimeError, OSError, ValueError) as exc:
                 reason = str(exc)
         print(('AI model available: ' + settings.model if ai_available else 'AI chat unavailable: ' + reason))
-        print('Browser dashboard has no AI chat. Use ordering.bat for deterministic ordering; configure_ai.bat to enable/change AI; ai_chat.bat for terminal AI.')
+        print('Browser menu/cart ordering is available with or without AI. Use configure_ai.bat to enable/change AI; ordering.bat and ai_chat.bat remain available.')
         if args.check:
             print('Core setup and imports passed. Non-AI mode is available.')
             return 0
