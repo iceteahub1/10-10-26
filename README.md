@@ -1,10 +1,23 @@
 # Perpetual Bistro AI Virtual Waiter
 
-Phase 4 adds real local Ollama/Qwen2.5 HTTP inference, validated dynamic tools,
-bounded persistent conversation context, and a labeled AI CLI. The Phase 3 FSM
-and transaction-safe Phase 2 order service continue to enforce checkout safety.
-See [Phase 4 setup, architecture and validation](docs/phase4-validation.md),
-[Phase 3](docs/phase3-validation.md), and [Phase 2](docs/phase2-validation.md).
+Phase 5 provides a local browser dashboard connected to the existing Python AI
+engine, SQLite order service, and conversation FSM. Double-click **setup.bat**
+once, then **run.bat**. Enter your table number, browse/filter the live menu, add
+items or chat in English/Filipino/Taglish, and review the visible cart. Use
+**Confirm & place order** only after reading the separate review. The saved
+receipt survives refresh and server restart. Cart edits require a fresh review.
+
+AI is optional: menu, cart controls, review, checkout, and receipts work without
+Ollama. The banner explicitly shows **AI unavailable** while menu/cart controls
+remain usable after you start a table session. **configure_ai.bat** selects an installed compatible Qwen2.5 size;
+**Check again** updates browser AI availability. No additional libraries or model
+downloads were introduced. Both terminal launchers remain available.
+Use **View acceptance report** / **Export report** in the footer for a privacy-safe
+QA event report; it is separate from the existing application log.
+
+See [browser security, tests, and Windows acceptance checklist](docs/phase5-validation.md),
+[Phase 4](docs/phase4-validation.md), [Phase 3](docs/phase3-validation.md), and
+[Phase 2](docs/phase2-validation.md).
 
 ## AI conversation (Phase 4)
 
@@ -35,8 +48,8 @@ for slow loading. No cloud AI or API key is used; after setup operation is offli
 **Validation:** see [flexible AI setup validation](docs/flexible-ai-validation.md)
 for current results and the distinction between mocked Ollama/download tests and
 real SQLite/HTTP checks. Real Windows and Qwen quality still require local testing.
-`run.bat` launches the existing infrastructure dashboard; it has no browser
-ordering or AI chat interface and now displays AI availability explicitly.
+`run.bat` launches the browser menu, AI chat, and ordering dashboard.
+AI availability is shown separately from deterministic ordering.
 
 ## Terminal ordering (Phase 3)
 
@@ -115,8 +128,8 @@ models, prompts for a new model, or silently substitutes another model. One
 project can have only one setup/launcher window running at a time. Occupied ports
 are reported; unrelated applications are never terminated.
 
-The dashboard remains the existing dashboard. Phase 4 AI conversation is available
-through its documented CLI; this installer change does not build the Phase 5 UI.
+The Phase 5 dashboard uses the same backend as both CLI modes. Launch stays local
+and never downloads models.
 
 ### If something goes wrong
 
@@ -213,7 +226,8 @@ No paid cloud AI dependency or secret is required.
 persistence, the ordering service, and conversation memory; `fsm_agent.py` controls the FSM.
 `ai_engine.py`, `ollama_client.py` and `tool_schemas.py` provide Phase 4 AI integration.
 `scripts/` implements setup and process launching. `app.py`, `templates/`, and
-`static/` provide only the Phase 1 dashboard. `seed/`, `docs/`, and `tests/` hold
+`static/` provide the Phase 5 dashboard; `bistro/browser_api.py` authenticates browser
+requests and delegates ordering to the shared FSM. `seed/`, `docs/`, and `tests/` hold
 future supporting assets. Generated databases, caches, logs, `.venv`, and secret
 configuration are ignored by Git.
 

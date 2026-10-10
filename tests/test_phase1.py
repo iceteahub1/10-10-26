@@ -101,7 +101,7 @@ class ApplicationIntegrationTests(unittest.TestCase):
         def browser(url):
             opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(url, timeout=3) as response:
-                self.assertIn(b'Phase 1', response.read())
+                self.assertIn(b'Your AI waiter', response.read())
             with opener.open(url+'/static/css/dashboard.css', timeout=3) as response:
                 self.assertIn(b'@media', response.read())
             opened.append(url)
