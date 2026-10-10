@@ -1,1 +1,73 @@
-"""ollama_client: reserved for later phases; no business logic implemented."""
+"""Local Ollama HTTP transport; no cloud credentials or substitute models."""
+import json
+import math
+import socket
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, build_opener, ProxyHandler
+
+
+class OllamaError(RuntimeError):
+    pass
+
+
+class MalformedResponse(OllamaError):
+    pass
+
+
+class ToolsUnsupported(OllamaError):
+    pass
+
+
+class OllamaClient:
+    def __init__(self, url='http://127.0.0.1:11434', model='qwen2.5:7b', timeout=120):
+        parsed = urlsplit(url)
+        if (parsed.scheme != 'http' or parsed.hostname not in ('localhost', '127.0.0.1')
+                or parsed.username or parsed.password or parsed.path not in ('', '/')
+                or parsed.query or parsed.fragment):
+            raise ValueError('Ollama URL must be a loopback HTTP origin.')
+        if not model.startswith('qwen2.5:') or not model.split(':', 1)[1] or any(c.isspace() for c in model):
+            raise ValueError('Specify an exact Qwen2.5 model tag.')
+        timeout = float(timeout)
+        if not math.isfinite(timeout) or not 0 < timeout <= 600:
+            raise ValueError('Ollama timeout must be between 0 and 600 seconds.')
+        self.url, self.model, self.timeout = url.rstrip('/'), model, timeout
+        self.opener = build_opener(ProxyHandler({}))  # Local service must bypass HTTP proxies.
+
+    def chat(self, messages, tools=None, *, structured=False):
+        payload = {'model': self.model, 'messages': messages, 'stream': False,
+                   'options': {'temperature': 0, 'num_predict': 2048}}
+        if tools is not None:
+            payload['tools'] = tools
+        if structured:
+            payload['format'] = 'json'
+        request = Request(self.url + '/api/chat', data=json.dumps(payload, allow_nan=False).encode(),
+                          headers={'Content-Type': 'application/json'})
+        try:
+            with self.opener.open(request, timeout=self.timeout) as response:
+                raw = response.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise MalformedResponse('Ollama response exceeded the size limit.')
+        except HTTPError as exc:
+            detail = exc.read(4096).decode(errors='replace')
+            if exc.code == 400 and 'does not support tools' in detail.lower():
+                raise ToolsUnsupported('Selected model does not support native tools.') from exc
+            if exc.code == 404:
+                raise OllamaError(f'Model unavailable. Run: ollama pull {self.model}') from exc
+            raise OllamaError('Ollama rejected the request. Check its logs and available RAM/VRAM.') from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise OllamaError('Ollama timed out loading or running the model. Check RAM/VRAM, close other applications, or increase BISTRO_OLLAMA_TIMEOUT.') from exc
+        except (URLError, OSError) as exc:
+            raise OllamaError('Cannot reach local Ollama. Install/start Ollama (ollama serve) and check BISTRO_OLLAMA_URL.') from exc
+        try:
+            result = json.loads(raw)
+            message = result['message']
+            if result.get('error') or result.get('done') is not True or message.get('role') != 'assistant':
+                raise ValueError()
+            if not isinstance(message.get('content', ''), str) or not isinstance(message.get('tool_calls', []), list):
+                raise ValueError()
+            if not message.get('content', '').strip() and not message.get('tool_calls'):
+                raise ValueError()
+            return message
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise MalformedResponse('Ollama returned an empty or invalid response.') from exc

@@ -1,10 +1,33 @@
 # Perpetual Bistro AI Virtual Waiter
 
-Phase 3 adds a deterministic five-state ordering controller, SQLite conversation
-memory, and a working JSON-action terminal CLI to the existing Phase 1 dashboard
-and Phase 2 transactional order services. AI/model routing is deferred to Phase 4.
-See [Phase 3 architecture, commands, migrations, and validation](docs/phase3-validation.md)
-and [Phase 2 service usage](docs/phase2-validation.md).
+Phase 4 adds real local Ollama/Qwen2.5 HTTP inference, validated dynamic tools,
+bounded persistent conversation context, and a labeled AI CLI. The Phase 3 FSM
+and transaction-safe Phase 2 order service continue to enforce checkout safety.
+See [Phase 4 setup, architecture and validation](docs/phase4-validation.md),
+[Phase 3](docs/phase3-validation.md), and [Phase 2](docs/phase2-validation.md).
+
+## AI conversation (Phase 4)
+
+Install/start Ollama and download the exact model, then run from CMD:
+
+```bat
+ollama pull qwen2.5:7b
+.venv\Scripts\python.exe virtual_waiter_prototype.py --ai --table 3
+.venv\Scripts\python.exe scripts\verify_phase4.py
+```
+
+The verification script uses **real Qwen** and disposable SQLite. Try `Dalawang
+Chicken Adobo po.`, `Magkano na total?`, `Can I review my order?`, then `Yes, confirm
+my order.` Inspect the returned cart, tool traces and receipt. Edits require a new
+review. Responses select validated database facts and constrained questions;
+free-form factual prose is blocked. Configure `BISTRO_OLLAMA_TIMEOUT=120` in `.env`
+for slow loading. No cloud AI or API key is used; after setup operation is offline.
+
+**Validation:** 92 automated tests pass on Linux/Python 3.12, including all Phase
+1–3 tests. Phase 4 uses controlled mock model responses with real SQLite. Local
+Ollama is unavailable in this cloud environment; real Qwen/Taglish quality and
+Windows execution remain unverified. See the linked validation checklist.
+`run.bat` continues to launch the Phase 1 dashboard; the AI interface is the CLI.
 
 ## Terminal ordering (Phase 3)
 
@@ -24,8 +47,7 @@ lab database. Enter `help` for all actions, `state` for persistent context, and
 
 Resume with the same table and optional printed session ID. After confirmation or
 cancellation, `new_session` starts a separate customer context. Cart edits invalidate
-review; confirmation requires a fresh review of the unchanged cart. Commands are
-explicit structured inputs; this CLI does not yet interpret natural language.
+review; confirmation requires a fresh review of the unchanged cart. Commands in this default mode are explicit structured inputs; `--ai` enables natural-language model routing.
 
 ## Windows 10/11 installation
 
@@ -39,7 +61,7 @@ explicit structured inputs; this CLI does not yet interpret natural language.
 5. The default exact model is `qwen2.5:7b`. Setup offers to download a missing
    model, or you can run `ollama pull qwen2.5:7b` yourself and rerun setup.
    Downloads require internet and several GB of storage. Model presence does
-   not prove your hardware can run inference; that is tested in a later phase.
+   not prove your hardware can run inference; run the Phase 4 real smoke test locally.
 6. Successful setup prints `SUCCESS: Phase 1 environment ready`.
 
 Setup creates data/log/runtime directories and safely initializes/migrates
@@ -102,7 +124,7 @@ are named `.venv-backup-*` and can be removed manually when no longer needed.
 
 Initial dependency and model installation normally needs internet access. After
 installation the dashboard and local prerequisite checks need no external AI
-service; later inference will remain local. Fonts/styles are served locally.
+service; AI inference remains local. Fonts/styles are served locally.
 A fully offline first installation needs separately prepared Python/Ollama
 installers, compatible dependency wheels, and an available local model.
 No paid cloud AI dependency or secret is required.
@@ -121,14 +143,14 @@ No paid cloud AI dependency or secret is required.
 - **Port occupied:** close your previous launcher or change `BISTRO_PORT`.
 - **Server failure:** inspect `logs/application.log`; check folder permissions.
 - **Insufficient memory:** the 7B model's inference requirements must be checked
-  locally. Choose a tested smaller Qwen2.5 tag in a later integration phase.
+  locally. Explicitly configure and locally validate a smaller exact Qwen2.5 tag if needed; the application never substitutes one.
 - **Browser did not open:** use the address printed by the launcher.
 
 ## Structure and scope
 
 `bistro/` contains shared paths/configuration, SQLite initialization, session
 persistence, the ordering service, and conversation memory; `fsm_agent.py` controls the FSM.
-AI integration remains reserved for Phase 4.
+`ai_engine.py`, `ollama_client.py` and `tool_schemas.py` provide Phase 4 AI integration.
 `scripts/` implements setup and process launching. `app.py`, `templates/`, and
 `static/` provide only the Phase 1 dashboard. `seed/`, `docs/`, and `tests/` hold
 future supporting assets. Generated databases, caches, logs, `.venv`, and secret
