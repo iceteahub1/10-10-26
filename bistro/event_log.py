@@ -12,7 +12,15 @@ CODES = {'ready', 'ai_disabled', 'model_missing', 'ollama_unavailable', 'ai_unav
          'session_active', 'duplicate_request', 'request_pending', 'request_interrupted', 'forbidden'}
 ACTIONS = {'add_item', 'update_quantity', 'remove_item', 'update_instructions'}
 SOURCES = {'controls', 'ai'}
+UX_REASONS = {'interface disabled after cancellation', 'controls disabled unexpectedly',
+              'no recovery action available', 'incorrect status message', 'AI available status mismatch',
+              'ordering unavailable without AI', 'backend not cancelled'}
+UX_FIELDS = {'backend_cancelled': bool, 'ui_recoverable': bool, 'new_order_available': bool,
+             'menu_available': bool, 'ordering_available': bool, 'ai_available': bool,
+             'result': {'pass', 'fail'}, 'reason': UX_REASONS, 'source': {'browser_report'}}
 FIELDS = {
+    'cancel_order_workflow': UX_FIELDS,
+    'ux_state': UX_FIELDS,
     'application_startup': {'phase': int},
     'ai_availability': {'available': bool, 'code': CODES},
     'menu_availability': {'available': bool, 'item_count': int, 'available_count': int},
@@ -93,5 +101,5 @@ class AcceptanceLog:
         except OSError:
             self.available = False
         return {'run_id': self.run_id, 'started_at': self.started_at, 'logging_available': self.available,
-                'scope': 'Latest server run; bounded recent backend observations, not an automatic QA pass.',
+                'scope': 'Latest server run; bounded recent backend and browser-reported observations, not an automatic QA pass.',
                 'events': events[-1000:]}

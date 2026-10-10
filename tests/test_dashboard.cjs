@@ -100,3 +100,28 @@ test('Check again reprobes connectivity, reconnects, and ignores an older ready 
   assert.match(await page.locator('#ai-status').textContent(), /AI available/);
   assert(calls >= 3);
 });
+
+test('Cancellation has a usable recovery path and logs both successful and broken UX', {timeout: 30000}, async t => {
+  const {page, url} = await setup(t);
+  await start(page, url);
+  await page.getByRole('button', {name: 'Add Chicken Adobo to order'}).click(); await idle(page);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', {name: 'Cancel this order'}).click(); await idle(page);
+  assert.match(await page.locator('#order-state').textContent(), /Order cancelled successfully/);
+  assert(await page.getByRole('button', {name: 'Start a new order', exact: true}).isEnabled());
+  assert(await page.getByRole('button', {name: 'Return to menu'}).isEnabled());
+  await page.getByRole('button', {name: 'Return to menu'}).click();
+  assert(await page.locator('#menu-panel').isVisible());
+  const events = () => page.evaluate(async () => (await (await fetch('/api/acceptance-report')).json()).events);
+  for (let i=0;i<30;i++) { if ((await events()).some(e=>e.event==='cancel_order_workflow' && e.result==='pass')) break; await page.waitForTimeout(50); }
+  assert((await events()).some(e=>e.event==='cancel_order_workflow' && e.result==='pass' && e.ui_recoverable));
+  // Deliberately break recovery without changing the backend; telemetry must detect it.
+  await page.evaluate(() => { document.querySelector('#start-new-order').disabled=true; reportUX(); });
+  for (let i=0;i<30;i++) { if ((await events()).some(e=>e.event==='cancel_order_workflow' && e.result==='fail')) break; await page.waitForTimeout(50); }
+  assert((await events()).some(e=>e.event==='cancel_order_workflow' && e.result==='fail' && e.reason==='no recovery action available'));
+  await page.evaluate(() => updateControls());
+  await page.getByRole('button', {name: 'Start a new order', exact: true}).click(); await idle(page);
+  assert(await page.getByRole('button', {name: 'Add Chicken Adobo to order'}).isEnabled());
+  await page.getByRole('button', {name: 'Add Chicken Adobo to order'}).click(); await idle(page);
+  assert(await page.getByRole('button', {name: 'Review order', exact:false}).isEnabled());
+});

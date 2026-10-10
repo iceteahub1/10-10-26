@@ -292,6 +292,36 @@ class BrowserAPI:
         if not replayed and 'order' in before and receipt_saved and not (before.get('order') or {}).get('receipt_id'):
             self.events.record('receipt_created', source=source)
 
+    def record_ux(self, sid, body):
+        flags = {'new_order_available', 'menu_available', 'ordering_available',
+                 'controls_disabled_unexpectedly', 'status_correct', 'ai_available'}
+        self.fields(body, flags | {'event'})
+        if body['event'] not in ('cancel_order_workflow', 'ux_state') or any(type(body[key]) is not bool for key in flags):
+            raise APIError('invalid_input', 'Use a supported UX event and boolean observations.')
+        state = self.agent(sid).state
+        cancelled = state == STATE_CANCELLED
+        terminal = state in (STATE_CANCELLED, STATE_CONFIRMED)
+        recoverable = body['new_order_available'] and body['menu_available'] and not body['controls_disabled_unexpectedly']
+        reason = None
+        if body['event'] == 'cancel_order_workflow' and not cancelled:
+            reason = 'backend not cancelled'
+        elif body['controls_disabled_unexpectedly']:
+            reason = 'interface disabled after cancellation' if cancelled else 'controls disabled unexpectedly'
+        elif terminal and not recoverable:
+            reason = 'no recovery action available'
+        elif not body['status_correct']:
+            reason = 'incorrect status message'
+        elif body['ai_available'] and not self.ai_status()['available']:
+            reason = 'AI available status mismatch'
+        elif not body['ai_available'] and state in ('STATE_TAKING_ORDER', 'STATE_REVIEW') and not body['ordering_available']:
+            # No stocked items is a valid reason to disable Add, not a UX failure.
+            if any(i['available'] and i['stock_qty'] > 0 for i in orders.browse_menu(db_path=self.db_path)):
+                reason = 'ordering unavailable without AI'
+        self.events.record(body['event'], backend_cancelled=cancelled, ui_recoverable=recoverable,
+                           new_order_available=body['new_order_available'], menu_available=body['menu_available'],
+                           ordering_available=body['ordering_available'], ai_available=body['ai_available'],
+                           result='fail' if reason else 'pass', reason=reason, source='browser_report')
+
     def response(self, result, sid):
         text = result.get('response') or result.get('message') or 'Request failed.'
         code = None if result['ok'] else error_code(text)
@@ -337,7 +367,10 @@ def install_routes(app, api):
         if not 16 <= len(request_id) <= 128 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in request_id):
             raise APIError('invalid_input', 'A valid request ID is required.')
         body = await api.body(request)
-        api.validate(path, body)
         from starlette.concurrency import run_in_threadpool
+        if path == 'acceptance-ux':
+            await run_in_threadpool(api.record_ux, sid, body)
+            return {'ok': True}
+        api.validate(path, body)
         response = await run_in_threadpool(api.execute, path, body, digest, sid, request_id)
         return JSONResponse(response, status_code=response.get('http_status', 200))

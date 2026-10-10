@@ -324,6 +324,36 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('No new order changes', result['message'])
         self.client.chat.assert_not_called()
 
+    def test_cancel_safety_and_browser_workflow_pass_fail(self):
+        self.start(); cart = self.add()['order']; item = cart['items'][0]
+        result = self.action('cancel_order')[1]
+        self.assertTrue(result['ok']); self.assertEqual(result['snapshot']['state'], 'STATE_CANCELLED')
+        self.assertFalse(self.confirm('a' * 64)[1]['ok'])
+        with connection(self.db) as con:
+            self.assertEqual(con.execute('SELECT count(*) FROM receipts').fetchone()[0], 0)
+            self.assertEqual(con.execute('SELECT stock_qty FROM menu_items WHERE id=?', (item['item_id'],)).fetchone()[0], item['stock_qty'])
+        report = {'event': 'cancel_order_workflow', 'new_order_available': True, 'menu_available': True,
+                  'ordering_available': False, 'controls_disabled_unexpectedly': False,
+                  'status_correct': True, 'ai_available': False}
+        self.assertTrue(self.request('acceptance-ux', report)[1]['ok'])
+        passed = self.request('acceptance-report')[1]['events'][-1]
+        self.assertEqual(passed['result'], 'pass'); self.assertTrue(passed['backend_cancelled']); self.assertTrue(passed['ui_recoverable'])
+        report.update(new_order_available=False, controls_disabled_unexpectedly=True)
+        self.request('acceptance-ux', report)
+        failed = self.request('acceptance-report')[1]['events'][-1]
+        self.assertEqual(failed['result'], 'fail'); self.assertEqual(failed['reason'], 'interface disabled after cancellation')
+        report.update(new_order_available=True, controls_disabled_unexpectedly=False, status_correct=False)
+        self.request('acceptance-ux', report)
+        self.assertEqual(self.request('acceptance-report')[1]['events'][-1]['reason'], 'incorrect status message')
+        report.update(status_correct=True, ai_available=True)
+        with patch.object(self.api, 'ai_status', return_value={'available': False}):
+            self.request('acceptance-ux', report)
+        self.assertEqual(self.request('acceptance-report')[1]['events'][-1]['reason'], 'AI available status mismatch')
+        report['message'] = 'private text'
+        self.assertEqual(self.request('acceptance-ux', report)[0], 400)
+        self.assertNotIn('private text', json.dumps(self.request('acceptance-report')[1]))
+        self.start(4); self.assertTrue(self.add()['order']['items'])
+
     def test_ai_missing_disabled_and_bad_status(self):
         self.api.client_factory = None
         with patch('bistro.browser_api.build_opener') as opener:

@@ -129,7 +129,7 @@ shows **AI unavailable**, the Ollama reason, and how to order without AI. Start 
 table session first to enable Add, regardless of AI availability.
 
 The footer provides **View acceptance report** and **Export report**. The JSON
-report contains recent backend observations from the latest server run:
+report contains recent backend and browser-reported observations from the latest server run:
 startup, AI/menu availability, cart action type and outcome, review transitions,
 checkout results, receipt creation, and workflow error codes. Use it alongside
 the Windows checklist; it does not certify UI behavior or real model quality.
@@ -209,3 +209,30 @@ Connectivity validation: 22 focused API tests and 4 Chromium checks passed.
 Complete pinned-environment discovery ran 261 tests: 260 passed and the existing
 PowerShell-only test was skipped. Real Windows/Ollama verification still requires
 the documented manual checks.
+
+### Cancellation recovery and browser acceptance checks
+
+Cancelled orders retain `STATE_CANCELLED`. The dashboard displays “Order cancelled
+successfully.” and offers **Start a new order**, **Return to menu**, and the table
+form for a new session. Closed-order mutation controls are hidden; navigation and
+recovery stay usable. Cancellation does not change stock or create receipts, and
+checkout of the cancelled order remains rejected.
+
+Browser checks submit boolean observations through the protected
+`/api/acceptance-ux` endpoint. `cancel_order_workflow` and `ux_state` events record
+`result: pass` or `fail`, recovery/menu/ordering availability, and fixed failure
+reasons for disabled controls, missing recovery, incorrect cancellation status,
+AI availability mismatch, or offline ordering failure. `backend_cancelled` is
+derived from the server FSM. Browser observations are labeled
+`source: browser_report`; they support troubleshooting and do not certify all UX.
+No free-form browser text is accepted. Existing report viewing/export includes
+these events, and existing application logging is unchanged.
+
+For Windows QA, add an item, cancel, check the confirmation and enabled recovery
+actions, return to the menu, then start a new order and add/review items again.
+Export the latest report and inspect the cancellation PASS event. Chromium
+regressions also deliberately disable recovery to verify a FAIL event.
+
+Cancellation follow-up validation: 23 focused API tests and 5 Chromium tests
+passed. The full Python suite ran once after focused checks: 262 tests, 261 passed
+and one existing PowerShell-only skip. Real Windows retesting remains required.
