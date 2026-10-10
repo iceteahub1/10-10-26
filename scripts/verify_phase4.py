@@ -18,7 +18,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', help='Installed exact Qwen2.5 tag; defaults to saved selection. Never downloads or changes preferences.')
     parser.add_argument('--transport', choices=('auto','native','structured'), default='auto', help='Initial transport; native automatically falls back if explicitly unsupported.')
+    parser.add_argument('--order-text', default='Dalawang Chicken Adobo po.', help='Customer wording to test; never used as a tool or expected result.')
+    parser.add_argument('--item', default='Chicken Adobo', help='Exact expected menu name, used only to verify SQLite results.')
+    parser.add_argument('--qty', type=int, default=2, help='Expected added quantity, used only to verify results.')
+    parser.add_argument('--bound', action='store_true', help='Test varied wording in an already-bound table, rather than through the initial table clarification.')
     args = parser.parse_args(argv)
+    if not 1 <= args.qty <= 2147483647:
+        parser.error('--qty must be a positive integer.')
     settings = load_settings()
     model = args.model or settings.model
     client = OllamaClient(settings.ollama_url, model, os.getenv('BISTRO_OLLAMA_TIMEOUT', '120'))
@@ -29,13 +35,23 @@ def main(argv=None):
         agent = ConversationAgent(db_path=db)
         engine = AIWaiter(agent=agent, client=client)
         engine.structured = args.transport == 'structured' or (args.transport == 'auto' and settings.ai_transport == 'structured')
-        first = engine.respond('Dalawang Chicken Adobo po.')
-        if not first['ok'] or agent.session_id is not None or first['inference_verified']:
-            print('FAIL: Python did not ask for a table safely before inference.')
-            return 1
-        print('PASS: No guessed table/session; pending customer request retained.')
-        stock_before = orders.check_stock(1, db_path=db)['stock_qty']
-        steps = [('Table 3 po.', 'add'),
+        matches = [item for item in orders.browse_menu(db_path=db) if item['name'] == args.item]
+        if len(matches) != 1:
+            parser.error('--item must be an exact test database menu name.')
+        item_id = matches[0]['id']
+        if args.bound:
+            if not agent.execute({'action': 'establish_session', 'arguments': {'table_no': 3}})['ok']:
+                return 1
+            add_text = args.order_text
+        else:
+            first = engine.respond(args.order_text)
+            if not first['ok'] or agent.session_id is not None or first['inference_verified']:
+                print('FAIL: Python did not ask for a table safely before inference.')
+                return 1
+            print('PASS: No guessed table/session; pending customer request retained.')
+            add_text = 'Table 3 po.'
+        stock_before = orders.check_stock(item_id, db_path=db)['stock_qty']
+        steps = [(add_text, 'add'),
                  ('Magkano na total?', 'total'),
                  ('Can I review my order?', 'review'),
                  ('Do not confirm yet. What is my total?', 'no-consent'),
@@ -56,8 +72,8 @@ def main(argv=None):
                 return 1
             context = agent.context()
             cart = context['order']
-            if context['table_no'] != 3 or not (len(cart['items']) == 1 and cart['items'][0]['name'] == 'Chicken Adobo' and cart['items'][0]['quantity'] == 2):
-                print('FAIL: Expected one Python-owned table session and exactly two Chicken Adobo, without duplicates.')
+            if context['table_no'] != 3 or not (len(cart['items']) == 1 and cart['items'][0]['name'] == args.item and cart['items'][0]['quantity'] == args.qty):
+                print(f'FAIL: Expected table 3 and exactly {args.qty} {args.item}, without duplicates.')
                 return 1
             if expected in ('add', 'total', 'review') and ('Total: PHP ' + cart['total'] + '.') not in result['response']:
                 print('FAIL: Acknowledgement did not show the authoritative SQLite total.')
@@ -68,8 +84,8 @@ def main(argv=None):
             if expected == 'confirm' and (agent.state != STATE_CONFIRMED or not cart.get('receipt_id') or 'Saved receipt:' not in result['response']):
                 print('FAIL: Explicit confirmation did not produce the saved receipt acknowledgement.')
                 return 1
-            expected_stock = stock_before - 2 if expected == 'confirm' else stock_before
-            if orders.check_stock(1, db_path=db)['stock_qty'] != expected_stock:
+            expected_stock = stock_before - args.qty if expected == 'confirm' else stock_before
+            if orders.check_stock(item_id, db_path=db)['stock_qty'] != expected_stock:
                 print('FAIL: Inventory changed before consent or was deducted more than once.')
                 return 1
         print(f'PASS: Real {model} acceptance; transport={"structured" if engine.structured else "native"}; incomplete turns=0. Disposable data removed.')

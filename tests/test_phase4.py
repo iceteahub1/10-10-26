@@ -143,20 +143,31 @@ class Phase4Tests(unittest.TestCase):
     def test_unrelated_message_cannot_confirm(self):
         token = self.review()
         result = self.run_model('How much is my total?', calls(call('confirm_order', confirmed=True, review_token=token)), reply())
-        self.assertFalse(result['tools'][0]['result']['ok'])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Rejected before dispatch.
         self.assertEqual(self.agent.state, STATE_REVIEW)
 
     def test_same_turn_review_and_confirmation_blocked(self):
         self.add()
         result = self.run_model('confirm', calls(call('request_review'), call('confirm_order', confirmed=True, review_token='invented')), reply())
-        self.assertFalse(result['tools'][-1]['result']['ok'])
-        self.assertEqual(self.agent.state, STATE_REVIEW)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Entire invalid batch has no effects.
+        self.assertEqual(self.agent.state, 'STATE_TAKING_ORDER')
+        self.assertIsNone(self.agent.context()['review'])
 
     def test_edit_invalidates_review_and_token(self):
         token = self.review()
         result = self.run_model('Yes, confirm my order.', calls(self.add_call(), call('confirm_order', confirmed=True, review_token=token)), reply())
-        self.assertFalse(result['tools'][-1]['result']['ok'])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Confirmation never authorizes an edit.
+        self.assertEqual(self.agent.state, STATE_REVIEW)
+        self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
+        self.assertTrue(self.run_model('Add two Chicken Adobo', calls(self.add_call()))['ok'])
         self.assertIsNone(self.agent.context()['review'])
+        result = self.run_model('Yes, confirm my order.', calls(call('confirm_order', confirmed=True, review_token=token)), reply())
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 4)
+        self.assertEqual(orders.check_stock(1, db_path=self.db)['stock_qty'], 30)
 
     def test_empty_and_cancelled_guards(self):
         self.assertFalse(dispatch(self.agent, call('request_review'))['ok'])

@@ -32,6 +32,16 @@ for tool in INTENT_TOOLS:
         params['properties']['current_instructions'] = {'type': 'string'}
     if name == 'add_item_to_order':
         params['required'].remove('instructions')  # An omitted customization means none.
+        tool['function']['description'] = ('Add NEW portions of an exact menu item. qty is the number of additional portions requested, '
+                                           'not a replacement total. Works with an empty cart; also adds to an existing cart. '
+                                           'Use instructions for customization of the new portions.')
+    if name == 'update_quantity':
+        tool['function']['description'] = ('Set the quantity of an EXISTING cart portion. Requires an existing cart line. '
+                                           'Never use this to add a new item or additional portions.')
+    if name == 'remove_item':
+        tool['function']['description'] = 'Remove an EXISTING cart portion; cannot be used when the cart is empty.'
+    if name == 'view_current_order':
+        tool['function']['description'] = 'Read the saved cart or receipt only. Does not add food or complete a requested addition.'
     if name == 'confirm_order':
         tool['function']['description'] = 'Express confirmation intent only. Python checks direct customer consent and the previously displayed review.'
 

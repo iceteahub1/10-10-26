@@ -8,6 +8,35 @@ installer, Windows launchers, and dashboard remain intact. No Phase 5 work.
 
 ## Root cause
 
+The follow-up test of commit `305f962` exposed a further boundary defect: every
+inference still received the full static intent catalogue, including existing-line
+quantity/removal/customization tools even when the cart was empty. Their short
+descriptions did not clearly distinguish adding NEW portions from setting an
+EXISTING portion's quantity. The reported "Which exact cart portion" error comes
+from resolving an existing-line edit against an empty cart; that validation was
+correct, but it happened after Qwen was offered an inapplicable operation. The
+exact edit tool name and internal model reasoning require the missing raw trace.
+
+The model-facing catalogue is now recomputed from authoritative FSM/cart state on
+each inference/retry, and checked again before dispatch. An empty cart excludes
+all line edits and review/checkout. A clearly established addition puts add first,
+retains menu/stock/allergen/cart reads, and excludes edit/cancel/review/checkout.
+Generic or ambiguous language gets state-appropriate tools rather than a guessed
+mutation. Direct consent to a displayed review exposes only checkout and reads.
+Both native tools and structured schemas use this policy; stale schemas are not
+retained in the conversation. Unavailable selections are rejected before identity
+binding, with bounded corrective feedback. Invalid batches have no effects.
+
+This is an affordance filter, not a deterministic ordering engine. Qwen still
+interprets natural language and supplies every action/argument; Python never
+converts a wrong update into an addition. No item names or model sizes are coded
+in the policy. The existing conservative completion grammar only tracks exact
+unconditional requests; unknown/customized wording remains model-interpreted in
+bound conversations, and ambiguous retained wording still requires restatement.
+The overly broad "I want" completion hint was narrowed so wanting customization
+does not falsely demand an addition. Successful saved tools still get immediate
+Python/SQLite acknowledgements without another model call.
+
 The first PR #7 fix removed model ownership of protected identifiers, but left
 three defects: the pending request was cleared immediately after session binding;
 the loop had no completion ledger linking a requested addition to its successful
@@ -84,24 +113,37 @@ the process does not automatically execute a historical request.
 ## Automated validation
 
 Run `.venv/bin/python -m unittest discover -s tests -q`.
-**197 tests: 196 passed, one pre-existing PowerShell simulation skipped because
+**216 tests: 215 passed, one pre-existing PowerShell simulation skipped because
 PowerShell is unavailable.** No new skip or removal was introduced. Existing
 follow-up fault tests now use a genuinely unresolved multipart request, retaining
 mutation-count, duplicate, timeout, grounding and transaction assertions. Tests
 that previously demanded an acknowledgement call now assert that it is absent.
+Checkout tests now additionally assert that a batch containing an unavailable
+operation is rejected before any effects, then explicitly exercise a valid edit
+and demonstrate that the old review token cannot check out the changed cart.
+No safety check was weakened; no test was removed or new skip introduced.
 
 All AI/model responses in this environment are **mocked**. SQLite/FSM, transaction,
 receipt, inventory and local HTTP regressions use real disposable data on Linux.
+New policy regressions cover the exact empty-cart/update failure and recovery,
+retry exhaustion without dispatch, other pending menu items under 3B/7B/14B
+labels, both transports' restricted schemas, catalogue refresh after completion,
+cart/state/review gating, safe allergen/stock prerequisites, and read-only recovery
+that must not falsely claim an unknown food request was fulfilled. Varied English,
+Filipino and Taglish fixtures exercise six menu items; a new SQLite menu item
+also works without item/phrase-specific backend code. These are mocked semantic
+interpretations, not evidence of actual language quality from those models.
 The exact Windows sequence is reproduced with a successful read followed by empty
 responses, including incorrect status prevention. Further cases cover native-to-
 structured recovery, unsupported native tools, non-JSON claims, incorrect quantity,
 ambiguous/changed retained intent, timeouts, partial additions, no replay on later
 reads, model labels 3B/7B/14B/custom, and the acceptance script's failure reporting.
 
-Modified files for this follow-up: `bistro/ai_engine.py`, `bistro/ai_protocol.py`,
-new `bistro/ai_request.py`, `scripts/verify_phase4.py`,
-`tests/test_ai_reliability.py`, `tests/test_phase4.py`, new
-`tests/test_pending_ai_request.py`, and this document.
+Modified files for the tool-selection follow-up: `bistro/ai_engine.py`,
+`bistro/ai_protocol.py`, `bistro/ai_request.py`, new `bistro/ai_tool_policy.py`,
+`scripts/verify_phase4.py`, `tests/test_ai_reliability.py`, `tests/test_phase4.py`,
+new `tests/test_ai_tool_policy.py`, and this document. The earlier pending-request
+regressions remain in `tests/test_pending_ai_request.py`.
 
 ## Repeatable real Windows acceptance
 
@@ -114,6 +156,8 @@ required by this fix. For group leads, run the optional acceptance against each
 .venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:3b
 .venv\Scripts\python.exe scripts\verify_phase4.py --model qwen2.5:7b
 .venv\Scripts\python.exe scripts\verify_phase4.py --model YOUR_INSTALLED_QWEN_TAG --transport structured
+.venv\Scripts\python.exe scripts\verify_phase4.py --model YOUR_INSTALLED_QWEN_TAG --item "Garlic Rice" --qty 1 --order-text "Isang Garlic Rice po."
+.venv\Scripts\python.exe scripts\verify_phase4.py --model YOUR_INSTALLED_QWEN_TAG --bound --item "Pork Sisig" --qty 2 --order-text "Pakidagdag po ng dalawang Pork Sisig."
 ```
 
 Any compatible Qwen2.5 size/tag uses the same backend. `--transport native` starts
@@ -124,6 +168,10 @@ review, withholding consent, and explicit confirmation. It checks exactly two
 portions, authoritative feedback, receipt and inventory deduction only once after
 consent. Every incomplete turn fails acceptance, even if another mutation succeeded;
 a read-only cart result cannot pass the addition step.
+`--item`/`--qty` are test assertions, never hints or arguments passed to Qwen.
+`--order-text` supplies customer wording. Default mode exercises the table question;
+`--bound` additionally tests varied natural language after trusted table binding.
+It does not relax the safety rule for ambiguous requests retained before binding.
 
 Record exact model tag, Ollama/Windows versions, RAM/VRAM, command, output and exit
 code. For manual fault testing, stop Ollama while **unfinished** work remains,

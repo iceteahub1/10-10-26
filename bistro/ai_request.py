@@ -58,7 +58,7 @@ class RequestProgress:
             # This is only a completion requirement, never authority to execute
             # a mutation. Complex/current-turn intent still goes through Qwen,
             # strict validation and the FSM; a read alone cannot satisfy it.
-            addition_prefix = re.match(r"\s*(?:please\s+)?(?:add|order|give me|I(?:'d| would) like|I want|Can I have)\b", text, re.I)
+            addition_prefix = re.match(r"\s*(?:please\s+)?(?:add|order|give me)\b", text, re.I)
             quantity_prefix = any(re.match(r'\s*(?:\d+|' + '|'.join(_QUANTITIES) + r')\s+' + re.escape(i['name']) + r'\b', text, re.I) for i in menu)
             if addition_prefix or quantity_prefix:
                 progress.remaining = [{'name': 'add_item_to_order', 'arguments': {}}]
