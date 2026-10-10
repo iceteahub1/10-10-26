@@ -1,9 +1,11 @@
 # Perpetual Bistro AI Virtual Waiter
 
-Phase 1: working dependency setup, local-service launcher, shared configuration,
-and responsive infrastructure dashboard. Restaurant database operations, ordering,
-FSM, and AI conversation are **not implemented**. The required deliverable files
-are explicitly marked placeholders, not completed lab evidence.
+Phase 2 adds a real SQLite menu, persistent table sessions, editable carts,
+transaction-safe checkout, and itemized receipts to the working Phase 1 setup,
+launcher, configuration, and responsive infrastructure dashboard. FSM and AI
+conversation remain deferred to Phase 3. The dashboard still shows infrastructure
+status; ordering is currently available through the Python service API.
+See [Phase 2 usage and validation](docs/phase2-validation.md).
 
 ## Windows 10/11 installation
 
@@ -20,8 +22,10 @@ are explicitly marked placeholders, not completed lab evidence.
    not prove your hardware can run inference; that is tested in a later phase.
 6. Successful setup prints `SUCCESS: Phase 1 environment ready`.
 
-Setup creates data/log/runtime directories but deliberately does not initialize
-SQLite until Phase 2. It never deletes or resets existing database files.
+Setup creates data/log/runtime directories and safely initializes
+`data/restaurant.db` after prerequisite checks pass. The menu is seeded once.
+Repeated setup preserves menu edits, stock, sessions, carts, and receipts.
+Unknown existing schemas are rejected without deleting or resetting records.
 Repeated setup reuses a validated environment. An invalid or moved environment
 can be archived with your consent; no application data is removed.
 
@@ -62,7 +66,9 @@ standard port only. Model configuration requires an exact `qwen2.5:` tag.
 All paths derive from the project directory, including `data/restaurant.db`,
 `logs`, `runtime`, templates, and `.venv`. The configurable currency defaults to
 PHP. Tax/service rates default to zero and are fractional demonstration settings,
-not professor-specified rates. No charges are calculated in Phase 1.
+not professor-specified rates. Phase 2 service totals use PHP and zero tax/service by default; callers can pass
+validated fractional rates explicitly. Receipt totals use integer centavos and
+round tax/service separately to the nearest centavo (half up).
 
 ## Moving to another computer or folder
 
@@ -100,7 +106,8 @@ No paid cloud AI dependency or secret is required.
 
 ## Structure and scope
 
-`bistro/` contains shared paths/configuration and reserved service modules.
+`bistro/` contains shared paths/configuration, SQLite initialization, session
+persistence, and the ordering service; AI/FSM modules remain reserved.
 `scripts/` implements setup and process launching. `app.py`, `templates/`, and
 `static/` provide only the Phase 1 dashboard. `seed/`, `docs/`, and `tests/` hold
 future supporting assets. Generated databases, caches, logs, `.venv`, and secret

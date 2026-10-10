@@ -1,4 +1,4 @@
-"""Repeatable environment setup; intentionally contains no database operations."""
+"""Repeatable environment setup with non-destructive SQLite initialization."""
 import argparse
 import hashlib
 import json
@@ -70,9 +70,11 @@ def main():
             subprocess.run([ollama_executable(), "pull", settings.model], check=True, env={**os.environ, "OLLAMA_HOST": settings.ollama_url})
             if not has_model(local_json(settings.ollama_url + "/api/tags"), settings.model):
                 raise RuntimeError("Model download finished but exact tag is unavailable.")
+        from bistro.database import initialize_database
+        initialize_database(ROOT / "data" / "restaurant.db")
         MARKER.write_text(json.dumps({"root": str(ROOT), "requirements": fingerprint(), "python": sys.version.split()[0]}, indent=2), encoding="utf-8")
         print("SUCCESS: Phase 1 environment ready. Run run.bat.")
-        print("Database initialization is deferred to Phase 2. No existing data was changed.")
+        print("Phase 2 database ready. Existing records and stock were preserved.")
     finally:
         stop_owned(owned)
     return 0
