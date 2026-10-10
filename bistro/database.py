@@ -1,18 +1,34 @@
 """SQLite connections and atomic, non-destructive schema initialization."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import sqlite3
 from bistro.paths import DATABASE, ROOT
 
 
+_ACTIVE = ContextVar("bistro_transaction", default=None)
+
+
 @contextmanager
 def connection(db_path=None, *, write=False):
-    """Open an existing database; writes take the SQLite reserved writer lock."""
+    """Open an existing database; writes take the SQLite reserved writer lock.
+
+    Synchronous nested service calls on this thread join the outer transaction;
+    the outer caller owns commit/rollback. A read cannot escalate to a write.
+    Do not pass an active context/connection to another thread."""
     path = Path(db_path) if db_path is not None else DATABASE
+    active = _ACTIVE.get()
+    if active is not None:
+        active_path, active_con, writable = active
+        if active_path != path.resolve() or (write and not writable):
+            raise RuntimeError('Nested database operation must use the same writable transaction.')
+        yield active_con
+        return
     con = sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True,
                           timeout=10, isolation_level=None)
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys = ON')
+    token = _ACTIVE.set((path.resolve(), con, write))
     try:
         con.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         yield con
@@ -21,11 +37,12 @@ def connection(db_path=None, *, write=False):
         con.rollback()
         raise
     finally:
+        _ACTIVE.reset(token)
         con.close()
 
 
 def initialize_database(db_path=None):
-    """Create/seed a fresh DB or validate v1. Never reset an existing database.
+    """Create/seed or validate the v1 base and migrate conversation memory safely.
 
     Unversioned nonempty databases and future versions are rejected: migration
     needs an explicit design rather than silently replacing user records.
@@ -57,7 +74,7 @@ def initialize_database(db_path=None):
                     raise RuntimeError(f'Incompatible {table} schema; no data was reset.')
             if con.execute('PRAGMA foreign_key_check').fetchone():
                 raise RuntimeError('Existing database has invalid foreign keys.')
-            con.commit()
+
         else:
             statement = ''
             for line in (ROOT / 'init_restaurant_db.sql').read_text(encoding='utf-8').splitlines(True):
@@ -67,7 +84,10 @@ def initialize_database(db_path=None):
                     statement = ''
             if statement.strip():
                 raise RuntimeError('Incomplete schema SQL.')
-            con.commit()
+
+        from bistro.conversation_store import migrate
+        migrate(con, ROOT)
+        con.commit()
     except BaseException:
         con.rollback()
         raise

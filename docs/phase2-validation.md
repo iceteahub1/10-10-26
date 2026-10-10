@@ -123,3 +123,12 @@ untested in this Linux environment. Real Ollama/Qwen inference is neither tested
 nor implemented by Phase 2. Browser cart/checkout UI, conversational confirmation,
 and FSM transitions are deferred. Reference documents and evidence logs were not
 edited. Phase 3 requires separate user approval.
+
+## Phase 3 additive extension
+
+The original base schema and `PRAGMA user_version=1` remain intact. Setup now
+also applies an independently versioned conversation-memory migration, tracked
+by `schema_metadata.conversation_schema_version`. Existing menus, carts, sessions,
+stock, and receipts are preserved. Conversation cancellation blocks checkout,
+and cart writes invalidate active reviews through SQLite triggers. See
+[Phase 3 migration and validation](phase3-validation.md) for the extension contract.
