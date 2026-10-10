@@ -226,3 +226,41 @@ The completion grammar is deliberately conservative; retained complex/conditiona
 requests need restatement. Multi-tool operations retain per-action transactions,
 not cross-tool atomicity. Table bindings are local session controls, not customer
 authentication. Browser ordering/AI chat remain unimplemented.
+
+## Confirmation protocol follow-up
+
+The reported `Expected a tool name and arguments` error originates in call-envelope
+parsing, before binding or checkout. The Windows report does not include the raw
+model envelope, so its exact shape cannot be established here. Previously,
+structured recovery constrained only JSON syntax (`format: "json"`), leaving the
+model free to return a tool definition, misplaced parameters, or other unusable
+JSON. Recovery now sends an Ollama JSON Schema generated from the currently
+allowed intent tools, requiring canonical named calls and their argument objects.
+The shared prompt distinguishes calls from tool definitions. Native tool calling
+remains supported; all generated output still passes the existing strict parser,
+intent scope, argument validation, consent, review-token and transactional guards.
+Malformed output never grants checkout authority. No customer phrase, food name,
+or model size was added. Stale-review invalidation now reports an incomplete
+checkout rather than a successful order mutation; the FSM itself is unchanged.
+
+Mock regressions cover the reported parser error with safe recovery, persistent
+malformed responses, ambiguous consent, missing/stale reviews, unsupported native
+tools, constrained HTTP payloads, immediate receipt acknowledgement and repeated
+confirmation without another stock decrement. They use real disposable SQLite
+and FSM state; inference is mocked. Real Ollama schema adherence and Windows
+execution remain unverified in this environment. Ollama versions that reject JSON
+Schema output fail safely rather than bypassing the parser or confirming orders.
+
+Windows acceptance: repeat the existing ordering/total/review scenario with each
+installed compatible Qwen2.5 size. After the displayed review, explicitly confirm;
+verify one saved receipt, STATE_CONFIRMED and a single inventory decrement. Repeat
+confirmation and verify the same receipt and unchanged stock. In a separate
+session, try an ambiguous reply and confirmation before review: neither should
+checkout. Edit a reviewed cart and verify a fresh review is required. Record the
+Ollama version, selected model, response source and state for each run.
+
+Validation for this follow-up: 86 targeted tests passed. The full discovery run
+executed 236 tests: 234 passed, one existing PowerShell availability skip, and
+one installer dependency-version error under system Python. That single failing
+test was rerun with the existing project `.venv` and passed; no dependencies or
+tests were changed to resolve it. No full-suite rerun was performed.

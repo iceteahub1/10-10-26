@@ -58,13 +58,13 @@ class OllamaClient:
         self.url, self.model, self.timeout = url.rstrip('/'), model, timeout
         self.opener = build_opener(ProxyHandler({}))  # Local service must bypass HTTP proxies.
 
-    def chat(self, messages, tools=None, *, structured=False):
+    def chat(self, messages, tools=None, *, structured=False, response_schema=None):
         payload = {'model': self.model, 'messages': messages, 'stream': False,
                    'options': {'temperature': 0, 'num_predict': 2048}}
         if tools is not None:
             payload['tools'] = tools
         if structured:
-            payload['format'] = 'json'
+            payload['format'] = response_schema if response_schema is not None else 'json'
         request = Request(self.url + '/api/chat', data=json.dumps(payload, allow_nan=False).encode(),
                           headers={'Content-Type': 'application/json'})
         try:

@@ -8,7 +8,7 @@ from bistro import conversation_store as memory, order_service as orders
 from bistro.database import connection
 from bistro.ollama_client import OllamaClient, OllamaError, MalformedResponse, ToolsUnsupported
 from bistro.tool_schemas import dispatch
-from bistro.ai_protocol import INTENT_TOOLS, parse_response, bind_intent, model_call, public_context, customer_table, transport_messages
+from bistro.ai_protocol import INTENT_TOOLS, parse_response, bind_intent, model_call, public_context, customer_table, transport_messages, action_response_schema
 from bistro.ai_request import MUTATIONS, RequestProgress, request_goals, table_answer_only
 from bistro.ai_tool_policy import available_tools, validate_available, ToolUnavailable
 from fsm_agent import ConversationAgent, STATE_REVIEW, STATE_CONFIRMED, STATE_CANCELLED
@@ -241,6 +241,9 @@ class AIWaiter:
                                         review_token=review_token)
                 protocol = {'role': 'system', 'content':
                             ('Use structured calls JSON. ' if self.structured else 'Use native tool intents. ') +
+                            'An action must use {"calls":[{"name":"tool_name","arguments":{}}]}; '
+                            'put required arguments inside arguments, never at the top level. '
+                            'Do not return the tool definition or its parameters schema as a call. '
                             'Only these current tools are allowed. Schemas: ' + memory.encode(tools)}
                 try:
                     if needs_routing:
@@ -253,8 +256,10 @@ class AIWaiter:
                         needs_routing = False
                         messages.append({'role': 'system', 'content': 'Established request goal (not an executed action): ' + memory.encode(progress.remaining)})
                         continue
+                    schema_options = {'response_schema': action_response_schema(tools)} if self.structured else {}
                     msg = self.client.chat(transport_messages([*messages, protocol], structured=self.structured),
-                                           None if self.structured else tools, structured=self.structured)
+                                           None if self.structured else tools, structured=self.structured,
+                                           **schema_options)
                     inferred = True
                     intents, parsed = parse_response(msg)
                     if len(intents) > self.max_calls - calls_used:
@@ -364,6 +369,10 @@ class AIWaiter:
                         result = {'ok': False, 'message': str(exc), 'error': 'ToolUnavailable', 'data': None}
                     else:
                         result = dispatch(self.agent, call, confirmation_allowed=can_confirm, review_token=review_token)
+                    if call['name'] == 'confirm_order' and (result.get('data') or {}).get('review_invalidated'):
+                        # The FSM safely invalidated a stale review; checkout did
+                        # not succeed, even though that state transition did.
+                        result = {**result, 'ok': False, 'error': 'StaleReview'}
                     if was_unbound and self.agent.session_id:
                         for entry in self.greeting_history:
                             self._record(entry['role'], entry['content'])

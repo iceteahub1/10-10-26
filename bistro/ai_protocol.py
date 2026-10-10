@@ -45,6 +45,24 @@ for tool in INTENT_TOOLS:
     if name == 'confirm_order':
         tool['function']['description'] = 'Express confirmation intent only. Python checks direct customer consent and the previously displayed review.'
 
+def action_response_schema(tools):
+    """Constrain generation, without treating the generated plan as authority."""
+    calls = [{'type': 'object', 'properties': {
+        'name': {'type': 'string', 'enum': [tool['function']['name']]},
+        'arguments': copy.deepcopy(tool['function']['parameters'])},
+        'required': ['name', 'arguments'], 'additionalProperties': False}
+        for tool in tools]
+    reply = {'type': 'object', 'properties': {
+        'reply': {'type': 'string'}, 'facts': {'type': 'array', 'items': {'type': 'string'}},
+        'pending_question': {'type': 'string'}},
+        'required': ['reply', 'facts'], 'additionalProperties': False}
+    if not calls:
+        return reply
+    return {'anyOf': [
+        {'type': 'object', 'properties': {'calls': {'type': 'array', 'minItems': 1,
+         'maxItems': 8, 'items': {'anyOf': calls}}},
+         'required': ['calls'], 'additionalProperties': False}, reply]}
+
 def _pairs(pairs):
     result = {}
     for key, value in pairs:
