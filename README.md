@@ -8,6 +8,10 @@ See [Phase 4 setup, architecture and validation](docs/phase4-validation.md),
 
 ## AI conversation (Phase 4)
 
+See [shared AI reliability and repeatable Windows acceptance](docs/phase4-reliability.md)
+for Python-owned session/identity binding, safe model-output recovery, and testing
+the same backend with different installed Qwen2.5 sizes.
+
 Double-click **configure_ai.bat** to enable AI or change models, then
 **ai_chat.bat** for the existing terminal conversation. Setup detects installed
 Qwen2.5 tags, prefers 7B in the menu, and lets you select 3B or another compatible

@@ -60,14 +60,20 @@ class OllamaClient:
         except (URLError, OSError) as exc:
             raise OllamaError('Cannot reach local Ollama. Install/start Ollama (ollama serve) and check BISTRO_OLLAMA_URL.') from exc
         try:
-            result = json.loads(raw)
+            from bistro.ai_protocol import decode_json
+            result = decode_json(raw.decode('utf-8'))
             message = result['message']
             if result.get('error') or result.get('done') is not True or message.get('role') != 'assistant':
                 raise ValueError()
+            # Ollama versions differ on nullable/omitted content for native calls.
+            if message.get('tool_calls') is None:
+                message['tool_calls'] = []
+            if message.get('content') is None and message.get('tool_calls'):
+                message['content'] = ''
             if not isinstance(message.get('content', ''), str) or not isinstance(message.get('tool_calls', []), list):
                 raise ValueError()
             if not message.get('content', '').strip() and not message.get('tool_calls'):
                 raise ValueError()
             return message
-        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise MalformedResponse('Ollama returned an empty or invalid response.') from exc
