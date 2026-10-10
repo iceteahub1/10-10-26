@@ -8,11 +8,16 @@ See [Phase 4 setup, architecture and validation](docs/phase4-validation.md),
 
 ## AI conversation (Phase 4)
 
-Install/start Ollama and download the exact model, then run from CMD:
+Double-click **configure_ai.bat** to enable AI or change models, then
+**ai_chat.bat** for the existing terminal conversation. Setup detects installed
+Qwen2.5 tags, prefers 7B in the menu, and lets you select 3B or another compatible
+installed size. Every selection must pass a read-only compatibility smoke check.
+No 7B download is required. Smaller models can fail the check or perform worse;
+passing is not a guarantee of real ordering/Taglish quality.
+
+For group leads, the optional deeper verification is:
 
 ```bat
-ollama pull qwen2.5:7b
-.venv\Scripts\python.exe virtual_waiter_prototype.py --ai --table 3
 .venv\Scripts\python.exe scripts\verify_phase4.py
 ```
 
@@ -23,16 +28,16 @@ review. Responses select validated database facts and constrained questions;
 free-form factual prose is blocked. Configure `BISTRO_OLLAMA_TIMEOUT=120` in `.env`
 for slow loading. No cloud AI or API key is used; after setup operation is offline.
 
-**Validation:** 92 automated tests pass on Linux/Python 3.12, including all Phase
-1–3 tests. Phase 4 uses controlled mock model responses with real SQLite. Local
-Ollama is unavailable in this cloud environment; real Qwen/Taglish quality and
-Windows execution remain unverified. See the linked validation checklist.
-`run.bat` continues to launch the Phase 1 dashboard; the AI interface is the CLI.
+**Validation:** see [flexible AI setup validation](docs/flexible-ai-validation.md)
+for current results and the distinction between mocked Ollama/download tests and
+real SQLite/HTTP checks. Real Windows and Qwen quality still require local testing.
+`run.bat` launches the existing infrastructure dashboard; it has no browser
+ordering or AI chat interface and now displays AI availability explicitly.
 
 ## Terminal ordering (Phase 3)
 
-After dependencies are installed, run `.venv\Scripts\python.exe virtual_waiter_prototype.py`
-on Windows or `.venv/bin/python virtual_waiter_prototype.py` on Linux. The CLI
+After setup, double-click **ordering.bat** on Windows, or run
+`.venv/bin/python virtual_waiter_prototype.py` on Linux. The CLI
 initializes/migrates SQLite without requiring Ollama. Use `--db PATH` for a separate
 lab database. Enter `help` for all actions, `state` for persistent context, and
 `quit` to preserve the session. Example inputs:
@@ -65,24 +70,30 @@ You do not need to type commands, edit PATH, or activate a Python environment.
    installs it in a dedicated folder under your Windows account. Existing Python
    installations are not overwritten; global PATH and file associations are not
    changed, and another Python launcher is not installed.
-5. Approve installation of the required libraries when asked. They are installed
-   into this project's `.venv`. If that environment is broken or copied, setup
-   offers to keep it as a backup and create a fresh one. **Restaurant data is kept.**
-6. If Ollama is missing, approve opening its **official download page**, then click
-   the Windows download and finish that installer. Return to the setup window and
-   press Enter. Setup automatically detects Ollama again and checks its service.
-7. Approve the exact configured Qwen model download. The default `qwen2.5:7b`
-   downloads about **4.7 GB**; allow at least **6 GB free storage** for it, plus
-   space for Python/libraries. Internet is needed for initial downloads. Other
-   Qwen tags have different sizes. Model presence does not prove sufficient RAM/VRAM.
-8. Wait for **Installation complete!** Then double-click **run.bat**. The existing
-   dashboard opens in your default browser. Keep the launcher window open;
-   press **Ctrl+C** there when finished.
+5. Setup installs pinned required libraries into this project's `.venv`. It checks
+   official PyPI wheel sizes and SHA-256 hashes first. Required verified downloads
+   below **100 MB (100,000,000 bytes)** can run automatically. At exactly 100 MB,
+   above it, or with an unknown size, setup requests approval. Known downloads
+   show their size, a conservative free-space allowance, and available disk space.
+6. If Ollama is available, choose an installed Qwen2.5 model. 3B is lightweight;
+   7B is preferred. Other installed Qwen2.5 tags are offered and must pass the
+   same check. If no model is installed, choose an optional 3B/7B download or **0**
+   to continue without AI. Every optional download asks permission, even if small.
+   Model manifests come from the official Ollama registry; Ollama verifies its
+   downloaded blobs. Unknown sizes are stated explicitly and require consent;
+   their storage requirements cannot be verified in advance.
+7. If Ollama is missing, unavailable, or you skip AI, **core installation succeeds**.
+   To enable AI later, install Ollama from its official Windows download page
+   (https://ollama.com/download/windows), start it, and double-click
+   **configure_ai.bat**. No privileged installer runs silently.
+8. Wait for **Installation complete!** Then double-click **run.bat**. Keep its
+   window open and press **Ctrl+C** when finished. Use **ordering.bat** for the
+   existing non-AI terminal ordering, or **ai_chat.bat** for terminal AI.
 
-Permission prompts default to **No**. Declining safely stops that step; rerun
-`setup.bat` when ready. Setup never deletes SQLite records, receipts, or inventory.
-Normally no administrator account is needed. Only a prerequisite's official
-installer or your organization's Windows policy may require extra permission.
+Permission prompts default to **No**. Declining an optional AI download keeps the
+core application usable. Declining a required Python/library installation stops
+that required step. Existing SQLite records, receipts and inventory are preserved.
+Broken/copied `.venv` folders are archived only with consent, as before.
 
 The automatic Python release is pinned because 3.12.10 is the last official
 Python 3.12 Windows installer release. Already installed compatible later 3.12
@@ -94,8 +105,9 @@ new installation; application startup always uses the verified project `.venv`.
 
 After successful setup, **run.bat** performs offline checks of the environment,
 setup record and pinned libraries. It offers setup if they are missing or broken,
-and offers repair for missing Ollama/model prerequisites. Unchanged completed
-setup reuses installed libraries and models without repeating downloads. One
+and continues without AI if Ollama or the selected model is unavailable. Unchanged completed
+setup reuses installed libraries without repeating downloads. Launch never downloads
+models, prompts for a new model, or silently substitutes another model. One
 project can have only one setup/launcher window running at a time. Occupied ports
 are reported; unrelated applications are never terminated.
 
@@ -121,8 +133,7 @@ through its documented CLI; this installer change does not build the Phase 5 UI.
   process-local execution-policy setting and do not change system policy; managed
   Windows policies can still block scripts.
 - **Model too slow / out of memory:** close competing applications and check
-  Ollama logs. Choosing another exact Qwen2.5 tag requires explicit configuration
-  and local validation; setup never silently replaces the model.
+  Ollama logs. Use **configure_ai.bat** to choose another installed model and run its compatibility check; setup never silently replaces the model.
 
 Advanced checks (optional; group leads only):
 
@@ -134,14 +145,17 @@ setup.bat --pull-model
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test_windows_bootstrap.ps1
 ```
 
-`--pull-model` still asks for download permission. `--check` requires a running
-Ollama service and starts no services after prerequisite checks.
+`--pull-model` never grants download permission or forces 7B. Selection and consent
+remain interactive. `--check` starts no services; an unavailable AI model is reported
+and the core check can still pass.
 See [installer design, test results and Windows acceptance checklist](docs/installer-validation.md).
 
 ## Configuration and paths
 
 Copy `.env.example` to `.env` only if overrides are needed. Environment variables
-have precedence. The default dashboard is loopback port 8000, and Ollama is
+have precedence for server/tax settings. A saved selection in `runtime/ai.json`
+has precedence over the legacy `BISTRO_MODEL` setting. Use **configure_ai.bat**
+to change that selection without reinstalling. The default dashboard is loopback port 8000, and Ollama is
 `http://127.0.0.1:11434`. Only local HTTP Ollama origins are accepted. A custom
 Ollama port must already be running; automatic service startup supports the
 standard port only. Model configuration requires an exact `qwen2.5:` tag.
@@ -156,7 +170,7 @@ round tax/service separately to the nearest centavo (half up).
 ## Moving to another computer or folder
 
 Do **not** copy and reuse `.venv`. Copy source and any database you intend to keep,
-install Python/Ollama on the destination, and rerun `setup.bat` to recreate the
+rerun `setup.bat` to detect/install Python and recreate the
 virtual environment. Recorded project locations detect copied environments.
 Ollama models are stored by Ollama, outside this project. Archived environments
 are named `.venv-backup-*` and can be removed manually when no longer needed.
@@ -167,7 +181,8 @@ Initial dependency and model installation normally needs internet access. After
 installation the dashboard and local prerequisite checks need no external AI
 service; AI inference remains local. Fonts/styles are served locally.
 A fully offline first installation needs separately prepared Python/Ollama
-installers, compatible dependency wheels, and an available local model.
+and a preinstalled verified project library environment; AI additionally needs
+Ollama and an installed compatible model. First-time library setup reads PyPI metadata.
 No paid cloud AI dependency or secret is required.
 
 ## Troubleshooting
@@ -180,7 +195,8 @@ No paid cloud AI dependency or secret is required.
 - **Moved/invalid `.venv`:** allow setup to archive it, or move only `.venv`
   manually and rerun setup. Keep `data` intact.
 - **Ollama unavailable:** start Ollama, check `ollama --version`, then rerun setup.
-- **Model missing:** run `ollama pull qwen2.5:7b` (or your configured exact tag).
+- **Model missing:** use `configure_ai.bat` to explicitly choose/download a model,
+  or continue with `ordering.bat`. No alternative model is selected automatically.
 - **Port occupied:** close your previous launcher or change `BISTRO_PORT`.
 - **Server failure:** inspect `logs/application.log`; check folder permissions.
 - **Insufficient memory:** the 7B model's inference requirements must be checked

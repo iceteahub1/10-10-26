@@ -278,8 +278,7 @@ class DatabaseTests(unittest.TestCase):
         marker.parent.mkdir()
         with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), \
              patch.object(setup, 'require_venv'), patch.object(setup.subprocess, 'run'), \
-             patch.object(setup, 'confirm', return_value=True), patch.object(setup, 'ensure_ollama_installed'), \
-             patch.object(setup, 'ensure_ollama', return_value=({'models':[{'name':'qwen2.5:7b'}]}, None)), \
+             patch.object(setup, 'confirm', return_value=True), patch('configure_ai.configure', return_value=False), \
              patch('bistro.paths.prepare_directories'), patch('sys.argv', ['setup','--inside']):
             self.assertEqual(setup.main(), 0)
             create_session(1, 's1', db_path=self.db)

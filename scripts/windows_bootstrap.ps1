@@ -1,6 +1,6 @@
 # Windows PowerShell 5.1 bootstrap: runs even when Python/py is missing.
 [CmdletBinding()]
-param([ValidateSet('Setup','Launch')][string]$Mode = 'Setup', [switch]$LibraryOnly,
+param([ValidateSet('Setup','Launch','ConfigureAI','Ordering','AIChat')][string]$Mode = 'Setup', [switch]$LibraryOnly,
       [switch]$PullModel, [switch]$Check, [switch]$NoBrowser,
       [Parameter(ValueFromRemainingArguments=$true)][string[]]$LegacyArgs)
 Set-StrictMode -Version Latest
@@ -139,6 +139,14 @@ function Receive-OfficialPython([string]$Destination) {
                 continue
             }
             if ($status -ne 200) { throw 'Python download did not return a successful response.' }
+            $size = $response.ContentLength
+            $sizeText = if ($size -lt 0) { 'unknown' } else { "$size bytes ($([Math]::Round($size / 1000000,2)) MB)" }
+            Write-Host "Python download size: $sizeText. Required free disk space: 150 MB for installation plus the download; internet required."
+            if (($size -lt 0 -or $size -ge 100000000) -and -not (Confirm-Step 'Approve this large or unknown-size Python download?')) {
+                throw 'Python download was declined. Nothing was installed.'
+            }
+            $drive = New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($Destination))
+            if ($drive.AvailableFreeSpace -lt (150000000 + [Math]::Max(0,$size))) { throw 'Insufficient free disk space for the Python download and installation.' }
             $stream = $response.GetResponseStream()
             $file = [IO.File]::Open($Destination,[IO.FileMode]::CreateNew)
             try {
@@ -146,10 +154,11 @@ function Receive-OfficialPython([string]$Destination) {
                 $total = 0; $timer = [Diagnostics.Stopwatch]::StartNew()
                 while (($count = $stream.Read($buffer,0,$buffer.Length)) -gt 0) {
                     $total += $count
-                    if ($total -gt 100MB -or $timer.Elapsed.TotalMinutes -gt 5) { throw 'Python download exceeded its size/time limit.' }
+                    if ($total -gt 100000000 -or ($size -ge 0 -and $total -gt $size) -or $timer.Elapsed.TotalMinutes -gt 5) { throw 'Python download exceeded its size/time limit.' }
                     $file.Write($buffer,0,$count)
                 }
                 if ($total -eq 0) { throw 'The Python download was empty.' }
+                if ($size -ge 0 -and $total -ne $size) { throw 'Python download size did not match verified metadata.' }
             } finally { $file.Dispose(); $stream.Dispose() }
             return
         } finally { if ($response) { $response.Dispose() } }
@@ -247,6 +256,18 @@ function Invoke-Bootstrap {
         }
         Invoke-Setup
         if (-not (Test-SetupReady)) { throw 'The application environment is not ready. Please rerun setup.bat.' }
+    }
+    if ($Mode -in @('ConfigureAI','Ordering','AIChat')) {
+        $exe = Join-Path $script:ProjectRoot '.venv\Scripts\python.exe'
+        if ($Mode -eq 'ConfigureAI') {
+            & $exe (Join-Path $script:ProjectRoot 'scripts\configure_ai.py')
+        } else {
+            $cli = @((Join-Path $script:ProjectRoot 'scripts\launch_ordering.py'))
+            if ($Mode -eq 'AIChat') { $cli += '--ai' }
+            & $exe @cli
+        }
+        if ($LASTEXITCODE -ne 0) { throw 'The selected mode could not run. Read the message above.' }
+        return
     }
     $arguments = @((Join-Path $script:ProjectRoot 'scripts\launch_application.py'))
     if ($Check) { $arguments += '--check' }

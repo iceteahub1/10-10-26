@@ -85,23 +85,28 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class PermissionTests(unittest.TestCase):
-    def test_libraries_declined_never_download(self):
+    @patch('download_policy.dependency_plan', return_value=(100_000_000, 'verified'))
+    def test_libraries_declined_never_download(self, plan):
         with patch.object(setup,'confirm',return_value=False), patch.object(setup.subprocess,'run') as run:
             with self.assertRaisesRegex(RuntimeError,'declined'):
                 setup.install_dependencies()
             run.assert_not_called()
 
-    def test_library_failure_readable(self):
+    @patch('download_policy.dependency_plan', return_value=(1, 'verified'))
+    def test_library_failure_readable(self, plan):
         with patch.object(setup,'confirm',return_value=True), patch.object(setup.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'pip')):
             with self.assertRaisesRegex(RuntimeError,'internet connection'):
                 setup.install_dependencies()
 
-    def test_libraries_pinned_project_only(self):
+    @patch('download_policy.dependency_plan', return_value=(1, 'verified'))
+    def test_libraries_pinned_project_only(self, plan):
         with patch.object(setup,'confirm',return_value=True), patch.object(setup.subprocess,'run') as run:
             setup.install_dependencies()
             argv = run.call_args_list[0].args[0]
             self.assertEqual(argv[0],sys.executable)
-            self.assertIn(str(ROOT / 'requirements.txt'),argv)
+            self.assertIn('--require-hashes', argv)
+            self.assertIn('--no-deps', argv)
+            plan.assert_called_once_with(ROOT / 'requirements.txt')
 
     def test_ollama_install_declined(self):
         with patch.object(setup,'ollama_executable',side_effect=RuntimeError('missing')), patch.object(setup,'confirm',return_value=False), patch.object(setup.webbrowser,'open') as browser:
@@ -124,29 +129,17 @@ class PermissionTests(unittest.TestCase):
             self.assertEqual(launch.main(),0)
             ollama.assert_not_called()
 
-    def test_model_download_failure_preserves_database(self):
+    def test_optional_ai_failure_completes_core_setup(self):
+        # The AI configurator returns unavailable; core database and marker still succeed.
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            (root / 'data').mkdir()
-            data = root / 'data' / 'restaurant.db'
-            data.write_bytes(b'existing inventory and receipts')
-            marker = root / 'runtime' / 'setup.json'
+            (root / 'requirements.txt').write_text('')
+            marker = root / 'runtime/setup.json'
             marker.parent.mkdir()
-            with patch.object(setup,'ROOT',root), patch.object(setup,'MARKER',marker), patch.object(setup,'require_venv'), patch.object(setup,'install_dependencies'), patch.object(setup,'ensure_ollama_installed'), patch.object(setup,'ensure_ollama',return_value=({'models':[]},None)), patch.object(setup,'confirm',return_value=True), patch.object(setup,'ollama_executable',return_value='ollama'), patch.object(setup.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'pull')), patch('sys.argv',['setup','--inside']):
-                with self.assertRaisesRegex(RuntimeError,'model download failed'):
-                    setup.main()
-            self.assertEqual(data.read_bytes(),b'existing inventory and receipts')
-            self.assertFalse(marker.exists())
-
-    def test_pull_model_flag_still_requires_permission(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            marker = root / 'runtime' / 'setup.json'
-            marker.parent.mkdir()
-            with patch.object(setup,'ROOT',root), patch.object(setup,'MARKER',marker), patch.object(setup,'require_venv'), patch.object(setup,'install_dependencies'), patch.object(setup,'ensure_ollama_installed'), patch.object(setup,'ensure_ollama',return_value=({'models':[]},None)), patch.object(setup,'confirm',return_value=False), patch.object(setup.subprocess,'run') as run, patch('sys.argv',['setup','--inside','--pull-model']):
-                with self.assertRaisesRegex(RuntimeError,'declined'):
-                    setup.main()
-                run.assert_not_called()
+            with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), patch.object(setup, 'require_venv'), patch.object(setup, 'install_dependencies'), patch('configure_ai.configure', return_value=False), patch('bistro.database.initialize_database') as db, patch('sys.argv', ['setup', '--inside', '--pull-model']):
+                self.assertEqual(setup.main(), 0)
+                db.assert_called_once_with(root / 'data/restaurant.db')
+                self.assertTrue(marker.exists())
 
     def test_pinned_dependency_validation_is_offline(self):
         import common
@@ -167,7 +160,7 @@ class PermissionTests(unittest.TestCase):
             marker = root / 'runtime' / 'setup.json'
             marker.parent.mkdir()
             marker.write_text(json.dumps({'root':str(root),'requirements':__import__('hashlib').sha256(b'').hexdigest()}))
-            with patch.object(setup,'ROOT',root), patch.object(setup,'MARKER',marker), patch.object(setup,'require_venv'), patch.object(setup,'verify_libraries',side_effect=RuntimeError('version mismatch')), patch.object(setup,'install_dependencies') as install, patch.object(setup,'ensure_ollama_installed'), patch.object(setup,'ensure_ollama',return_value=({'models':[{'name':'qwen2.5:7b'}]},None)), patch('bistro.database.initialize_database'), patch('sys.argv',['setup','--inside']):
+            with patch.object(setup,'ROOT',root), patch.object(setup,'MARKER',marker), patch.object(setup,'require_venv'), patch.object(setup,'verify_libraries',side_effect=RuntimeError('version mismatch')), patch.object(setup,'install_dependencies') as install, patch('configure_ai.configure', return_value=False), patch('bistro.database.initialize_database'), patch('sys.argv',['setup','--inside']):
                 self.assertEqual(setup.main(),0)
                 install.assert_called_once()
 

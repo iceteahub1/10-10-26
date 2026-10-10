@@ -1,5 +1,13 @@
 # Windows installer improvements
 
+## Current behavior
+
+The flexible AI installer update supersedes the consent and mandatory-AI behavior
+described in this earlier validation record. See
+[flexible AI setup validation](flexible-ai-validation.md) for current download
+rules, optional AI behavior, launchers and verification boundaries. The Python
+detection/signature and `.venv` preservation design below remains in use.
+
 ## Scope
 
 The `installer-improvement` branch is based on `main` with Phase 4 merged.
