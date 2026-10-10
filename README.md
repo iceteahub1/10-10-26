@@ -8,9 +8,12 @@ items or chat in English/Filipino/Taglish, and review the visible cart. Use
 receipt survives refresh and server restart. Cart edits require a fresh review.
 
 AI is optional: menu, cart controls, review, checkout, and receipts work without
-Ollama. **configure_ai.bat** selects an installed compatible Qwen2.5 size;
+Ollama. The banner explicitly shows **AI unavailable** while menu/cart controls
+remain usable after you start a table session. **configure_ai.bat** selects an installed compatible Qwen2.5 size;
 **Check again** updates browser AI availability. No additional libraries or model
 downloads were introduced. Both terminal launchers remain available.
+Use **View acceptance report** / **Export report** in the footer for a privacy-safe
+QA event report; it is separate from the existing application log.
 
 See [browser security, tests, and Windows acceptance checklist](docs/phase5-validation.md),
 [Phase 4](docs/phase4-validation.md), [Phase 3](docs/phase3-validation.md), and

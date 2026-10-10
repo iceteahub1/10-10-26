@@ -687,3 +687,9 @@ footer span {
     padding:0
   }
 }
+
+.ai-status.unavailable {
+  border-color: #d9a39a;
+  background: #fff0eb;
+  color: var(--danger);
+}

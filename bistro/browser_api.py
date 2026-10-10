@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from bistro import conversation_store as memory, order_service as orders
 from bistro.database import connection, initialize_database
 from bistro.paths import DATABASE
+from bistro.event_log import AcceptanceLog
 from bistro.ai_engine import AIWaiter
 from bistro.ollama_client import OllamaClient
 from bistro.tool_schemas import dispatch
@@ -53,8 +54,9 @@ class BrowserAgent(ConversationAgent):
 
 
 class BrowserAPI:
-    def __init__(self, settings, db_path=None, client_factory=None):
+    def __init__(self, settings, db_path=None, client_factory=None, acceptance_log_path=None):
         self.settings, self.db_path, self.client_factory = settings, db_path or DATABASE, client_factory
+        self.events = AcceptanceLog(acceptance_log_path)
 
     def initialize(self):
         initialize_database(self.db_path)
@@ -101,7 +103,22 @@ class BrowserAPI:
             'review_token': hashlib.sha256(memory.encode(review).encode()).hexdigest() if review else None,
             'messages': messages[-100:]})
 
+    def menu(self, category=None):
+        try:
+            items = orders.browse_menu(category, db_path=self.db_path)
+        except Exception:
+            self.events.record('menu_availability', available=False)
+            raise
+        self.events.record('menu_availability', available=True, item_count=len(items),
+                           available_count=sum(bool(i['available'] and i['stock_qty'] > 0) for i in items))
+        return public(items)
+
     def ai_status(self):
+        status = self._ai_status()
+        self.events.record('ai_availability', available=status['available'], code=status['code'])
+        return status
+
+    def _ai_status(self):
         base = {'available': False, 'model': self.settings.model}
         if self.client_factory:
             return {**base, 'available': True, 'code': 'ready', 'message': 'AI available.'}
@@ -216,18 +233,24 @@ class BrowserAPI:
                     raise APIError('duplicate_request', 'Request ID was already used for different input.', 409)
                 if prior['result_json'] is None:
                     raise APIError('request_pending', 'This request is pending or interrupted. Refresh your cart; restart the server if interrupted.', 409)
-                return json.loads(prior['result_json'])
+                response = json.loads(prior['result_json'])
+                self.record_outcome(path, body, response, {}, replayed=True)
+                return response
             if con.execute('SELECT 1 FROM browser_requests WHERE credential_hash=? AND result_json IS NULL', (digest,)).fetchone():
                 raise APIError('request_pending', 'Another request is still running. Wait and refresh your cart.', 409)
             sid = con.execute('SELECT session_id FROM browser_bindings WHERE credential_hash=?', (digest,)).fetchone()[0]
             con.execute('INSERT INTO browser_requests VALUES (?,?,?,NULL)', (digest, request_id, fingerprint))
+        before = {}
         try:
             if path != 'chat':
                 with connection(self.db_path, write=True) as con:
+                    before = self.audit_snapshot(sid)
                     result, sid = self.perform(path, body, digest, sid)
                     response = self.response(result, sid)
                     con.execute('UPDATE browser_requests SET result_json=? WHERE credential_hash=? AND request_id=?', (memory.encode(response), digest, request_id))
-                    return response
+                self.record_outcome(path, body, response, before, result)
+                return response
+            before = self.audit_snapshot(sid)
             result, sid = self.perform(path, body, digest, sid)
             response = self.response(result, sid)
         except APIError as exc:
@@ -237,7 +260,39 @@ class BrowserAPI:
             response = {'ok': False, 'code': 'application_failure', 'message': 'The application could not complete this request. Refresh your cart to check saved changes.', 'http_status': 500}
         with connection(self.db_path, write=True) as con:
             con.execute('UPDATE browser_requests SET result_json=? WHERE credential_hash=? AND request_id=?', (memory.encode(response), digest, request_id))
+        self.record_outcome(path, body, response, before, locals().get('result'))
         return response
+
+    def audit_snapshot(self, sid):
+        # Observability failures never alter ordering behavior.
+        try:
+            return self.snapshot(sid)
+        except Exception:
+            return {}
+
+    def record_outcome(self, path, body, response, before, result=None, *, replayed=False):
+        source = 'ai' if path == 'chat' else 'controls'
+        after = response.get('snapshot') or {}
+        ok = response.get('ok') is True
+        if not ok:
+            self.events.record('workflow_error', code=response.get('code'), stage=path)
+        if path == 'action' and body.get('action') in EDIT_ACTIONS:
+            self.events.record('cart_action', action=body['action'], ok=ok, source=source, replayed=replayed)
+        traces = (result or {}).get('tools', []) if path == 'chat' else []
+        for trace in traces:
+            name = trace.get('call', {}).get('name')
+            action = 'add_item' if name == 'add_item_to_order' else name
+            if action in EDIT_ACTIONS:
+                self.events.record('cart_action', action=action, ok=trace.get('result', {}).get('ok') is True,
+                                   source=source, replayed=replayed)
+        if not replayed and (before.get('state') != after.get('state') or body.get('action') == 'request_review'):
+            if 'STATE_REVIEW' in (before.get('state'), after.get('state')):
+                self.events.record('review_transition', from_state=before.get('state'), to_state=after.get('state'), ok=ok, source=source)
+        receipt_saved = bool((after.get('order') or {}).get('receipt_id'))
+        if path == 'confirm' or any(t.get('call', {}).get('name') == 'confirm_order' for t in traces):
+            self.events.record('checkout_result', ok=ok, receipt_saved=receipt_saved, source=source, replayed=replayed)
+        if not replayed and 'order' in before and receipt_saved and not (before.get('order') or {}).get('receipt_id'):
+            self.events.record('receipt_created', source=source)
 
     def response(self, result, sid):
         text = result.get('response') or result.get('message') or 'Request failed.'
@@ -265,11 +320,17 @@ def install_routes(app, api):
 
     @app.get('/api/menu')
     def menu(category: str | None = None):
-        return public(orders.browse_menu(category, db_path=api.db_path))
+        return api.menu(category)
 
     @app.get('/api/ai-status')
     def ai_status():
         return api.ai_status()
+
+    @app.get('/api/acceptance-report')
+    def acceptance_report(request: Request, download: bool = False):
+        api.identity(request)
+        headers = {'Content-Disposition': 'attachment; filename="acceptance-report.json"'} if download else {}
+        return JSONResponse(api.events.report(), headers=headers)
 
     @app.post('/api/{path}')
     async def mutate(path: str, request: Request):

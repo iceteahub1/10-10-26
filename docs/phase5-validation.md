@@ -77,8 +77,8 @@ The existing dashboard readiness test now checks the real waiter heading instead
 of the removed Phase 1 placeholder text; its HTTP/static/readiness/cleanup
 assertions remain in place. No existing tests were removed or skipped.
 
-Cloud validation: the focused browser suite passed all 18 tests. Full discovery
-ran 254 tests: 253 passed and the existing PowerShell-only bootstrap scenario
+Cloud validation: the focused browser API suite passed all 20 tests, plus 3 acceptance-log tests.
+Full discovery ran 259 tests: 258 passed and the existing PowerShell-only bootstrap scenario
 was skipped because PowerShell is unavailable. Real headless Chromium checks
 passed at 1440, 1024, 768, and 390 px, including item addition, mocked AI through
 the real engine, cart synchronization, review/checkout, receipt refresh, mobile
@@ -117,3 +117,65 @@ consume inventory you need to keep. Never delete/replace a working database.
 Real Windows batch/PowerShell behavior, browser opening/printing and real Qwen
 quality/latency across installed sizes require this manual verification. Mocked
 inference is not evidence of actual model quality.
+
+## Offline UI follow-up and acceptance reports
+
+AI availability now controls only chat. Menu/category navigation stays available;
+cart writes depend on an active table session, stock, and a request currently in
+progress. The old global disabled-flag restoration has been replaced with
+explicit state rules. After failed chat, a background AI recheck cannot hold cart
+controls disabled; status probes time out after five seconds. The banner explicitly
+shows **AI unavailable**, the Ollama reason, and how to order without AI. Start a
+table session first to enable Add, regardless of AI availability.
+
+The footer provides **View acceptance report** and **Export report**. The JSON
+report contains recent backend observations from the latest server run:
+startup, AI/menu availability, cart action type and outcome, review transitions,
+checkout results, receipt creation, and workflow error codes. Use it alongside
+the Windows checklist; it does not certify UI behavior or real model quality.
+
+Events are written separately to `logs/acceptance.jsonl`, with one rotated backup
+and a 1 MiB limit per file (plus the final small event). The report is limited to
+the latest 1000 events for the current startup. Restarting starts a new QA run;
+the old bounded file history may remain locally. Timestamps include UTC offsets.
+No chat text, special instructions, table numbers, menu/receipt/session IDs,
+request IDs, cookie values, credential hashes, or free-form exception messages
+are logged. The report contains only fixed codes, boolean outcomes, counts,
+state names, timestamps and a non-authorizing QA run identifier. Report access
+uses the existing browser cookie and loopback Host protection.
+
+Logging file failures do not prevent ordering; the report then shows
+`logging_available: false`. `application.log` and its existing launch behavior
+are unchanged. Cached confirmation results are labeled as replayed and do not
+log another receipt creation. Keep exported reports outside Git.
+
+Focused checks:
+
+```bat
+.venv\Scripts\python.exe -m unittest discover -s tests -p test_browser.py -v
+.venv\Scripts\python.exe -m unittest discover -s tests -p test_acceptance_log.py -v
+```
+
+Optional developer browser regressions use an existing Node/Playwright/Chromium
+installation; these are not application dependencies and setup installs none of
+them. The test server uses a disposable real database and a closed loopback Ollama
+port for offline tests. AI-mode regression inference alone is mocked.
+
+```text
+node --test tests/test_dashboard.cjs
+```
+
+If using a system Chromium, set `BISTRO_CHROMIUM` to its executable path. Set
+`BISTRO_TEST_PYTHON` only if the pinned test environment is elsewhere. The browser
+checks cover complete offline ordering, an initially working AI becoming
+unavailable with a stalled recheck, and preserved chat-to-cart integration.
+
+For manual QA, stop Ollama before starting the dashboard, complete a deterministic
+order, then export the report. Repeat by stopping Ollama after an initially ready
+AI status. Confirm that only chat becomes unavailable, then complete another
+order using the menu/cart. Include the exported report with the observations.
+
+Follow-up validation: all 3 Chromium regressions passed (offline checkout, stalled
+AI recheck recovery, and preserved AI mode). The focused API/log tests passed
+before a single complete regression run. Real Windows/Ollama retesting remains
+required using the checklist above.

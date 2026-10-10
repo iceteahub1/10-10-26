@@ -31,7 +31,7 @@ class BrowserTests(unittest.TestCase):
         self.settings = replace(load_settings(), port=port)
         self.client = Mock(model=self.settings.model)
         self.client.classify_request.return_value = 'general'
-        self.app = create_app(settings=self.settings, db_path=self.db, client_factory=lambda: self.client)
+        self.app = create_app(settings=self.settings, db_path=self.db, client_factory=lambda: self.client, acceptance_log_path=Path(self.temp.name)/'acceptance.jsonl')
         self.api = self.app.state.browser_api
         self.server = uvicorn.Server(uvicorn.Config(self.app, host='127.0.0.1', port=port, log_level='critical'))
         self.thread = threading.Thread(target=self.server.run, daemon=True); self.thread.start()
@@ -236,6 +236,55 @@ class BrowserTests(unittest.TestCase):
             status = self.request('ai-status')[1]; self.assertEqual(status['code'], 'ollama_unavailable')
             self.assertEqual(self.request('chat', {'message': 'Hello'})[0], 503)
         self.add(); self.assertTrue(self.confirm(self.review())[1]['ok'])
+
+    def test_no_ollama_deterministic_workflow_and_private_acceptance_report(self):
+        self.api.client_factory = None
+        private_note = 'QA private instruction do not export'
+        with patch('bistro.browser_api.build_opener') as opener:
+            opener.return_value.open.side_effect = OSError()
+            self.assertEqual(self.request('ai-status')[1]['code'], 'ollama_unavailable')
+            self.start(19382)
+            self.assertEqual(self.request('chat', {'message': 'private customer message'})[0], 503)
+            cart = self.add()['order']; line = cart['items'][0]
+            self.assertTrue(self.action('update_quantity', line_id=line['line_id'], qty=3)[1]['ok'])
+            self.assertTrue(self.action('update_instructions', line_id=line['line_id'], instructions=private_note)[1]['ok'])
+            self.assertTrue(self.action('remove_item', line_id=line['line_id'])[1]['ok'])
+            self.add()
+            self.review()
+            self.assertTrue(self.action('update_quantity', line_id=self.request('session')[1]['order']['items'][0]['line_id'], qty=3)[1]['ok'])
+            token = self.review(); key = uuid4().hex
+            confirmed = self.confirm(token, key)[1]; self.assertTrue(confirmed['ok'])
+            receipt = confirmed['snapshot']['order']
+            self.assertEqual(self.confirm(token, key)[1]['snapshot']['order'], receipt)
+            self.assertEqual(self.confirm(token)[1]['snapshot']['order'], receipt)
+            self.assertEqual(self.request('session')[1]['order'], receipt)
+        self.client.chat.assert_not_called()
+        report = self.request('acceptance-report')[1]
+        self.assertTrue(report['logging_available'])
+        events = report['events']; names = [e['event'] for e in events]
+        for name in ('application_startup', 'ai_availability', 'menu_availability', 'cart_action', 'review_transition', 'checkout_result', 'receipt_created', 'workflow_error'):
+            self.assertIn(name, names)
+        self.assertEqual(names.count('receipt_created'), 1)
+        self.assertTrue(any(e.get('replayed') for e in events if e['event'] == 'checkout_result'))
+        raw = json.dumps(report)
+        for private in (private_note, 'private customer message', key, next(iter(self.cookies)).value, receipt['receipt_id'], 'Chicken Adobo', '19382'):
+            self.assertNotIn(private, raw)
+        for field in ('session_id', 'credential_hash', 'review_token', 'table_no', 'special_instructions'):
+            self.assertNotIn(field, raw)
+        request = Request(self.url + '/api/acceptance-report?download=true')
+        with self.browser.open(request) as response:
+            self.assertIn('attachment', response.headers['Content-Disposition'])
+            self.assertEqual(json.loads(response.read())['run_id'], report['run_id'])
+        anonymous, _ = self.new_browser()
+        self.assertEqual(self.request('acceptance-report', browser=anonymous)[0], 401)
+        self.assertEqual(self.request('acceptance-report', headers={'Host': 'evil.example'})[0], 403)
+
+    def test_acceptance_log_file_failure_does_not_block_checkout(self):
+        self.start()
+        self.api.events.path = Path(self.temp.name)  # Opening a directory as a file fails on Windows/Linux.
+        self.add(); self.assertTrue(self.confirm(self.review())[1]['ok'])
+        self.assertTrue(self.request('session')[1]['order']['receipt_id'])
+        self.assertFalse(self.request('acceptance-report')[1]['logging_available'])
 
     def test_ai_missing_disabled_and_bad_status(self):
         self.api.client_factory = None

@@ -7,9 +7,9 @@ function node(tag, text, cls) { const el = document.createElement(tag); if (text
 const money = cents => new Intl.NumberFormat('en-PH', {style: 'currency', currency: 'PHP'}).format(cents / 100);
 function notify(message, error = false) { $('notice').textContent = message; $('notice').className = error ? 'error' : ''; $('notice').hidden = !message; }
 function editable() { return !!snapshot.order && !['STATE_CONFIRMED', 'STATE_CANCELLED'].includes(snapshot.state); }
-async function get(path) { const response = await fetch('/api/' + path, {cache: 'no-store'}); const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Could not load restaurant data.'); return data; }
+async function get(path, options = {}) { const response = await fetch('/api/' + path, {cache: 'no-store', ...options}); const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Could not load restaurant data.'); return data; }
 function savePending(value) { pending = value; try { if (value) sessionStorage.setItem('bistro_pending', JSON.stringify(value)); else sessionStorage.removeItem('bistro_pending'); } catch (_) {} $('retry-box').hidden = !value; }
-function setBusy(value) { busy = value; document.querySelectorAll('button, input, textarea').forEach(el => { if (value) { el.dataset.wasDisabled = String(el.disabled); el.disabled = true; } else if (el.dataset.wasDisabled !== undefined) { el.disabled = el.dataset.wasDisabled === 'true'; delete el.dataset.wasDisabled; } }); if (!value) render(); else updateControls(); }
+function setBusy(value) { busy = value; updateControls(); }
 function updateControls() {
   $('message').disabled = busy || !editable() || !aiAvailable;
   $('send').disabled = $('message').disabled;
@@ -19,6 +19,14 @@ function updateControls() {
   $('edit-order').disabled = busy || snapshot.state !== 'STATE_REVIEW';
   $('table-form').querySelector('button').disabled = busy || editable();
   $('table-no').disabled = busy || editable();
+  // AI availability only gates chat. Recompute ordering from its own current state.
+  document.querySelectorAll('#menu-items form').forEach(form => {
+    const disabled = busy || !editable() || form.dataset.available !== 'true';
+    form.querySelectorAll('input, button').forEach(el => { el.disabled = disabled; });
+  });
+  document.querySelectorAll('#cart-items input, #cart-items button').forEach(el => { el.disabled = busy || !editable(); });
+  $('new-session').disabled = busy;
+  $('retry-request').disabled = busy;
 }
 async function refresh() {
   const values = await Promise.all([get('session'), get('menu')]); snapshot = values[0]; menu = values[1]; render();
@@ -37,7 +45,10 @@ async function sendRequest(path, body, replay = null) {
     if (request.path === 'chat' && result.ok) $('message').value = '';
     // Never render a cached old snapshot as the current cart after a retry.
     await refresh();
-    if (request.path === 'chat' && !result.ok) await checkAI();
+    if (request.path === 'chat' && !result.ok) {
+      if (['ai_unavailable', 'ollama_unavailable', 'model_missing', 'ai_disabled'].includes(result.code)) showAI(false, result.message);
+      checkAI(); // Never hold ordering controls for an AI availability probe.
+    }
     if (snapshot.review || snapshot.state === 'STATE_CONFIRMED') selectPanel('cart-panel');
   } catch (_) {
     notify('Connection interrupted. Your request may already be saved. Refresh the cart or use Retry same request; it will not repeat saved changes.', true);
@@ -50,7 +61,7 @@ function renderMenu() {
   $('categories').replaceChildren();
   const categories = ['All', ...new Set(menu.map(item => item.category))];
   if (!categories.includes(category)) category = 'All';
-  categories.forEach(value => { const button = node('button', value); button.setAttribute('aria-pressed', String(category === value)); button.disabled = busy; button.onclick = () => { category = value; renderMenu(); }; $('categories').append(button); });
+  categories.forEach(value => { const button = node('button', value); button.setAttribute('aria-pressed', String(category === value)); button.onclick = () => { category = value; renderMenu(); }; $('categories').append(button); });
   $('menu-items').replaceChildren();
   menu.filter(item => category === 'All' || item.category === category).forEach(item => {
     const card = node('article', undefined, 'menu-card');
@@ -60,6 +71,7 @@ function renderMenu() {
     card.append(node('p', available ? item.stock_qty + ' available' : 'Currently unavailable', 'stock' + (available ? '' : ' unavailable')));
     card.append(node('p', 'Allergens: ' + (item.allergens.join(', ') || 'None listed'), 'details'));
     const form = node('form'), label = node('label', 'Special instructions'), input = node('input');
+    form.dataset.available = String(available);
     input.id = 'note-' + item.id; label.htmlFor = input.id; input.maxLength = 500; input.placeholder = 'Optional'; input.disabled = busy || !editable() || !available;
     const row = node('div', undefined, 'input-row'), qty = node('input'), button = node('button', '+ Add');
     qty.type = 'number'; qty.min = '1'; qty.max = String(Math.min(10000, item.stock_qty)); qty.step = '1'; qty.value = '1'; qty.required = true; qty.setAttribute('aria-label', 'Quantity of ' + item.name); qty.disabled = input.disabled;
@@ -106,7 +118,23 @@ function render() {
   $('messages').scrollTop = $('messages').scrollHeight;
   renderMenu(); updateControls();
 }
-async function checkAI() { try { const status = await get('ai-status'); aiAvailable = status.available; $('ai-status').textContent = status.message + ' · ' + status.model + (status.available ? '' : ' Menu and cart controls remain available.'); } catch (error) { aiAvailable = false; $('ai-status').textContent = error.message; } updateControls(); }
+function showAI(available, message, model = '') {
+  aiAvailable = available === true;
+  $('ai-status').textContent = (aiAvailable ? 'AI available: ' : 'AI unavailable: ') + message + (model ? ' · ' + model : '') +
+    (aiAvailable ? '' : ' Use the menu and cart controls to order without AI.');
+  $('ai-status').parentElement.classList.toggle('unavailable', !aiAvailable);
+  updateControls();
+}
+async function checkAI() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const status = await get('ai-status', {signal: controller.signal});
+    showAI(status.available, status.message, status.model);
+  } catch (_) {
+    showAI(false, 'Could not check local Ollama.');
+  } finally { clearTimeout(timeout); }
+}
 $('table-form').onsubmit = event => { event.preventDefault(); sendRequest('session', {table_no: Number($('table-no').value)}); };
 $('new-session').onclick = () => { $('table-form').hidden = false; $('new-session').hidden = true; $('table-no').value = ''; $('table-no').focus(); };
 $('chat-form').onsubmit = event => { event.preventDefault(); if (!$('message').disabled && $('message').value.trim()) sendRequest('chat', {message: $('message').value}); };
