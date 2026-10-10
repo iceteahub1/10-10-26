@@ -1,4 +1,5 @@
-"""Opt-in REAL Qwen smoke test; uses disposable SQLite, never the restaurant DB."""
+"""Opt-in REAL selected-model acceptance test; uses disposable SQLite only."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -9,40 +10,91 @@ from bistro.ai_engine import AIWaiter
 from bistro.config import load_settings
 from bistro.database import initialize_database
 from bistro.ollama_client import OllamaClient
+from bistro import order_service as orders
 from fsm_agent import ConversationAgent, STATE_REVIEW, STATE_CONFIRMED
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--model', help='Installed exact Qwen2.5 tag; defaults to saved selection. Never downloads or changes preferences.')
+    parser.add_argument('--transport', choices=('auto','native','structured'), default='auto', help='Initial transport; native automatically falls back if explicitly unsupported.')
+    parser.add_argument('--order-text', default='Dalawang Chicken Adobo po.', help='Customer wording to test; never used as a tool or expected result.')
+    parser.add_argument('--item', default='Chicken Adobo', help='Exact expected menu name, used only to verify SQLite results.')
+    parser.add_argument('--qty', type=int, default=2, help='Expected added quantity, used only to verify results.')
+    parser.add_argument('--bound', action='store_true', help='Test varied wording in an already-bound table, rather than through the initial table clarification.')
+    args = parser.parse_args(argv)
+    if not 1 <= args.qty <= 2147483647:
+        parser.error('--qty must be a positive integer.')
     settings = load_settings()
-    client = OllamaClient(settings.ollama_url, settings.model, os.getenv('BISTRO_OLLAMA_TIMEOUT', '120'))
+    model = args.model or settings.model
+    client = OllamaClient(settings.ollama_url, model, os.getenv('BISTRO_OLLAMA_TIMEOUT', '120'))
+    print(f'REAL OLLAMA ACCEPTANCE: {model}. No model downloads, preference changes, or real restaurant data access.')
     with tempfile.TemporaryDirectory(prefix='bistro-real-qwen-') as folder:
         db = Path(folder) / 'validation.db'
         initialize_database(db)
         agent = ConversationAgent(db_path=db)
-        agent.execute({'action': 'establish_session', 'arguments': {'table_no': 3}})
         engine = AIWaiter(agent=agent, client=client)
-        for text, expected in [('Dalawang Chicken Adobo po.', 'add'),
-                               ('Magkano na total?', 'total'),
-                               ('Can I review my order?', 'review'),
-                               ('Yes, confirm my order.', 'confirm')]:
+        engine.structured = args.transport == 'structured' or (args.transport == 'auto' and settings.ai_transport == 'structured')
+        matches = [item for item in orders.browse_menu(db_path=db) if item['name'] == args.item]
+        if len(matches) != 1:
+            parser.error('--item must be an exact test database menu name.')
+        item_id = matches[0]['id']
+        if args.bound:
+            if not agent.execute({'action': 'establish_session', 'arguments': {'table_no': 3}})['ok']:
+                return 1
+            add_text = args.order_text
+        else:
+            first = engine.respond(args.order_text)
+            if not first['ok'] or agent.session_id is not None or first['inference_verified']:
+                print('FAIL: Python did not ask for a table safely before inference.')
+                return 1
+            print('PASS: No guessed table/session; pending customer request retained.')
+            add_text = 'Table 3 po.'
+        stock_before = orders.check_stock(item_id, db_path=db)['stock_qty']
+        steps = [(add_text, 'add'),
+                 ('Magkano na total?', 'total'),
+                 ('Can I review my order?', 'review'),
+                 ('Do not confirm yet. What is my total?', 'no-consent'),
+                 ('Yes, confirm my order.', 'confirm')]
+        for text, expected in steps:
             result = engine.respond(text)
-            print(json.dumps({'customer': text, 'result': result}, ensure_ascii=False, indent=2))
+            print(json.dumps({'customer': text, 'result': result}, ensure_ascii=True, indent=2))
+            # An incomplete turn is a failure even when another mutation was
+            # saved. A read-only result must never pass as partial order success.
             if not result['ok']:
+                print('FAIL: Customer request incomplete. Inspect authoritative feedback; do not replay saved mutations.')
+                return 1
+            if result.get('partial_success') or result['source'] != 'application_results':
+                print('FAIL: Expected authoritative completion, without a required model acknowledgement.')
+                return 1
+            if expected == 'add' and not result.get('order_mutation_succeeded'):
+                print('FAIL: A read-only action did not fulfill the pending food addition.')
                 return 1
             context = agent.context()
             cart = context['order']
-            if expected == 'add' and not (len(cart['items']) == 1 and cart['items'][0]['name'] == 'Chicken Adobo' and cart['items'][0]['quantity'] == 2):
-                print('FAIL: Real model did not produce the expected cart.')
+            if context['table_no'] != 3 or not (len(cart['items']) == 1 and cart['items'][0]['name'] == args.item and cart['items'][0]['quantity'] == args.qty):
+                print(f'FAIL: Expected table 3 and exactly {args.qty} {args.item}, without duplicates.')
                 return 1
-            if expected == 'review' and agent.state != STATE_REVIEW:
-                print('FAIL: Real model did not request review.')
+            if expected in ('add', 'total', 'review') and ('Total: PHP ' + cart['total'] + '.') not in result['response']:
+                print('FAIL: Acknowledgement did not show the authoritative SQLite total.')
                 return 1
-            if expected == 'confirm' and (agent.state != STATE_CONFIRMED or not cart.get('receipt_id')):
-                print('FAIL: Real model did not finalize a receipt.')
+            if expected in ('review','no-consent') and agent.state != STATE_REVIEW:
+                print('FAIL: Review was not preserved, or checkout happened without direct consent.')
                 return 1
-        print('PASS: Real local Qwen conversation/tool smoke test. Disposable data removed.')
+            if expected == 'confirm' and (agent.state != STATE_CONFIRMED or not cart.get('receipt_id') or 'Saved receipt:' not in result['response']):
+                print('FAIL: Explicit confirmation did not produce the saved receipt acknowledgement.')
+                return 1
+            expected_stock = stock_before - args.qty if expected == 'confirm' else stock_before
+            if orders.check_stock(item_id, db_path=db)['stock_qty'] != expected_stock:
+                print('FAIL: Inventory changed before consent or was deducted more than once.')
+                return 1
+        print(f'PASS: Real {model} acceptance; transport={"structured" if engine.structured else "native"}; incomplete turns=0. Disposable data removed.')
         return 0
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f'ACCEPTANCE FAILED: {exc}', file=sys.stderr)
+        raise SystemExit(1)

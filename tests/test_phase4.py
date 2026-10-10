@@ -37,6 +37,7 @@ class Phase4Tests(unittest.TestCase):
         self.agent.execute({'action': 'establish_session', 'arguments': {'table_no': 3}})
         self.sid = self.agent.session_id
         self.client = Mock(model='qwen2.5:7b')
+        self.client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         self.ai = AIWaiter(agent=self.agent, client=self.client)
 
     def run_model(self, text, *outputs):
@@ -92,9 +93,9 @@ class Phase4Tests(unittest.TestCase):
         observed = []
         def model(messages, *args, **kwargs):
             observed.append(json.loads(json.dumps(messages)))
-            return calls(self.add_call()) if len(observed) == 1 else reply()
+            return calls(self.add_call()) if len(observed) == 1 else calls(call('browse_menu'))
         self.client.chat.side_effect = model
-        result = self.ai.respond('Add two Chicken Adobo')
+        result = self.ai.respond('Add two Chicken Adobo and show the menu')
         self.assertTrue(result['ok'])
         feedback = next(m for m in observed[1] if m['role'] == 'tool')
         self.assertEqual(json.loads(feedback['content'])['data']['total'], '370.00')
@@ -143,20 +144,31 @@ class Phase4Tests(unittest.TestCase):
     def test_unrelated_message_cannot_confirm(self):
         token = self.review()
         result = self.run_model('How much is my total?', calls(call('confirm_order', confirmed=True, review_token=token)), reply())
-        self.assertFalse(result['tools'][0]['result']['ok'])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Rejected before dispatch.
         self.assertEqual(self.agent.state, STATE_REVIEW)
 
     def test_same_turn_review_and_confirmation_blocked(self):
         self.add()
         result = self.run_model('confirm', calls(call('request_review'), call('confirm_order', confirmed=True, review_token='invented')), reply())
-        self.assertFalse(result['tools'][-1]['result']['ok'])
-        self.assertEqual(self.agent.state, STATE_REVIEW)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Entire invalid batch has no effects.
+        self.assertEqual(self.agent.state, 'STATE_TAKING_ORDER')
+        self.assertIsNone(self.agent.context()['review'])
 
     def test_edit_invalidates_review_and_token(self):
         token = self.review()
         result = self.run_model('Yes, confirm my order.', calls(self.add_call(), call('confirm_order', confirmed=True, review_token=token)), reply())
-        self.assertFalse(result['tools'][-1]['result']['ok'])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['tools'], [])  # Confirmation never authorizes an edit.
+        self.assertEqual(self.agent.state, STATE_REVIEW)
+        self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
+        self.assertTrue(self.run_model('Add two Chicken Adobo', calls(self.add_call()))['ok'])
         self.assertIsNone(self.agent.context()['review'])
+        result = self.run_model('Yes, confirm my order.', calls(call('confirm_order', confirmed=True, review_token=token)), reply())
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 4)
+        self.assertEqual(orders.check_stock(1, db_path=self.db)['stock_qty'], 30)
 
     def test_empty_and_cancelled_guards(self):
         self.assertFalse(dispatch(self.agent, call('request_review'))['ok'])
@@ -169,7 +181,7 @@ class Phase4Tests(unittest.TestCase):
         self.assertEqual(self.agent.context()['order']['items'], [])
 
     def test_repeated_mutation_not_retried(self):
-        result = self.run_model('add', calls(self.add_call()), calls(self.add_call()))
+        result = self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), calls(self.add_call()))
         self.assertFalse(result['ok'])
         self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
 
@@ -186,7 +198,7 @@ class Phase4Tests(unittest.TestCase):
 
     def test_invalid_final_response_does_not_replay_mutation(self):
         bad = {'role': 'assistant', 'content': 'not json'}
-        self.assertFalse(self.run_model('add', calls(self.add_call()), bad, bad)['ok'])
+        self.assertFalse(self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), bad, bad)['ok'])
         self.assertEqual(self.agent.context()['order']['items'][0]['quantity'], 2)
 
     def test_failed_database_operation(self):
@@ -245,7 +257,7 @@ class Phase4Tests(unittest.TestCase):
     def test_stale_fact_after_edit_blocked(self):
         self.add()
         bad = reply(facts=['Total: PHP 370.00.'])
-        self.assertFalse(self.run_model('add', calls(self.add_call()), bad, bad)['ok'])
+        self.assertFalse(self.run_model('Add two Chicken Adobo and show the menu', calls(self.add_call()), bad, bad)['ok'])
         self.assertEqual(self.agent.context()['order']['total'], '740.00')
 
 
