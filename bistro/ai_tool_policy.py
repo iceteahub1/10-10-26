@@ -33,7 +33,8 @@ def available_tools(context, progress, *, confirmation_allowed=False, review_tok
         # Existing-line edits are not equivalent to adding another portion.
         names &= READS | {'add_item_to_order'}
     elif progress.recognized and progress.remaining:
-        names &= READS | {goal['name'] for goal in progress.remaining}
+        # An unrelated successful read cannot fulfill a cart/review goal.
+        names &= {goal['name'] for goal in progress.remaining}
     elif confirmation_allowed:
         # Direct consent for a displayed review is not consent to edit/cancel
         # that cart or replace its review before attempting checkout.

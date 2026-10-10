@@ -8,6 +8,10 @@ import re
 
 MUTATIONS = frozenset(('add_item_to_order', 'update_quantity', 'remove_item',
                        'update_instructions', 'confirm_order', 'cancel_order'))
+ROUTING_INTENTS = frozenset(('view_current_order', 'request_review', 'browse_menu',
+    'get_menu_by_category', 'check_stock', 'check_item_allergen', 'add_item_to_order',
+    'confirm_order', 'cancel_order', 'update_quantity', 'remove_item',
+    'update_instructions', 'general', 'clarify'))
 _QUANTITIES = dict(zip(('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
                         'isa', 'isang', 'dalawa', 'dalawang', 'tatlo', 'tatlong'),
                        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 1, 2, 2, 3, 3)))
@@ -63,6 +67,17 @@ class RequestProgress:
             if addition_prefix or quantity_prefix:
                 progress.remaining = [{'name': 'add_item_to_order', 'arguments': {}}]
         return progress
+
+    @classmethod
+    def from_routing(cls, intent, fallback):
+        """Validate semantic classification; it supplies no executable arguments."""
+        if not isinstance(intent, str) or intent not in ROUTING_INTENTS:
+            raise ValueError('Invalid request classification; no actions executed.')
+        if intent == 'general':
+            return fallback  # Complex/multiple operations still need tool interpretation.
+        if intent == 'clarify':
+            return cls([{'name': 'clarify', 'arguments': {}}])
+        return cls([{'name': intent, 'arguments': {}}])
 
     @staticmethod
     def matches(goal, call):

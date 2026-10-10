@@ -8,6 +8,33 @@ installer, Windows launchers, and dashboard remain intact. No Phase 5 work.
 
 ## Root cause
 
+The latest Windows follow-up revealed an intent/completion gap: exact additions
+had goals, but natural-language totals/review requests did not. Such requests
+received broad state-valid tools, and the first successful lookup could end the
+turn. Thus a menu lookup could wrongly fulfill a cart-total or review request.
+
+For requests without an established goal, the same selected Qwen client now makes
+a non-executing structured semantic classification first. It understands the
+current English/Filipino/Taglish request using bounded, ID-free context. Its strict
+allowlisted result selects the action scope; it supplies no action arguments,
+session identifiers or permission. A cart-total goal exposes only cart viewing;
+a review goal exposes only review. Unrelated tools are rejected before dispatch
+and corrected within the existing shared retry bound. Classification errors/timeouts
+never dispatch actions. Both native and structured action modes use these goals.
+Complex multi-operation requests retain general tool interpretation; ambiguous
+classifications require clarification. No customer phrase or model size is coded
+into this semantic routing. The old exact-addition guard remains a supplementary
+completion/safety check, not the natural-language ordering engine.
+
+Direct checkout consent still comes from Python's strict existing confirmation
+check, never from model classification. Without a previously displayed review,
+checkout is rejected before inference. With a review, only checkout is exposed;
+successful checkout is acknowledged immediately. Repeating direct confirmation
+reads the saved receipt without inference or another stock deduction. For unknown
+natural-language requests, classification adds one purposeful model call before
+tool routing; no acknowledgement-only call is added afterward. Explicit client
+adapters/test doubles now need `classify_request` as well as `chat`.
+
 The follow-up test of commit `305f962` exposed a further boundary defect: every
 inference still received the full static intent catalogue, including existing-line
 quantity/removal/customization tools even when the cart was empty. Their short
@@ -113,7 +140,7 @@ the process does not automatically execute a historical request.
 ## Automated validation
 
 Run `.venv/bin/python -m unittest discover -s tests -q`.
-**216 tests: 215 passed, one pre-existing PowerShell simulation skipped because
+**229 tests: 228 passed, one pre-existing PowerShell simulation skipped because
 PowerShell is unavailable.** No new skip or removal was introduced. Existing
 follow-up fault tests now use a genuinely unresolved multipart request, retaining
 mutation-count, duplicate, timeout, grounding and transaction assertions. Tests
@@ -122,6 +149,13 @@ Checkout tests now additionally assert that a batch containing an unavailable
 operation is rejected before any effects, then explicitly exercise a valid edit
 and demonstrate that the old review token cannot check out the changed cart.
 No safety check was weakened; no test was removed or new skip introduced.
+Existing mocked clients now explicitly mock semantic classification; their action,
+fault and safety fixtures are retained. New focused tests cover total/review routing,
+wrong-menu corrections/exhaustion, prior-review/consent enforcement, valid checkout,
+repeated confirmation, classifier protocol/retry/timeout failures, both transports,
+and English/Filipino/Taglish wording under different model labels. One test exercises
+the actual classifier client method with mocked transport and verifies exactly one
+classification plus one action call, with no final acknowledgement call.
 
 All AI/model responses in this environment are **mocked**. SQLite/FSM, transaction,
 receipt, inventory and local HTTP regressions use real disposable data on Linux.
@@ -144,6 +178,9 @@ Modified files for the tool-selection follow-up: `bistro/ai_engine.py`,
 `scripts/verify_phase4.py`, `tests/test_ai_reliability.py`, `tests/test_phase4.py`,
 new `tests/test_ai_tool_policy.py`, and this document. The earlier pending-request
 regressions remain in `tests/test_pending_ai_request.py`.
+The semantic-routing update changes `bistro/ai_engine.py`, `bistro/ai_request.py`,
+`bistro/ai_tool_policy.py`, `bistro/ollama_client.py`, the existing mocked AI test
+fixtures, new `tests/test_ai_semantic_routing.py`, and this document.
 
 ## Repeatable real Windows acceptance
 
@@ -181,6 +218,10 @@ during review; checkout must still require direct consent.
 
 **Unverified/limitations:** real Windows and Qwen/Ollama execution are unavailable
 here. Passing schema/installer smoke tests does not guarantee language quality.
+Semantic classification accuracy and latency remain unverified with real Ollama;
+a wrongly classified request can still require clarification/correction. General
+multi-operation interpretation remains model-dependent. All reported language and
+model-label regressions use mocked semantic and action responses, not real Qwen.
 The completion grammar is deliberately conservative; retained complex/conditional
 requests need restatement. Multi-tool operations retain per-action transactions,
 not cross-tool atomicity. Table bindings are local session controls, not customer

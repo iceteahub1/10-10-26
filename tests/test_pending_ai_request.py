@@ -28,6 +28,7 @@ class PendingRequestTests(unittest.TestCase):
         initialize_database(self.db)
         self.agent = ConversationAgent(db_path=self.db)
         self.client = Mock(model='qwen2.5:any-compatible-size')
+        self.client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         self.engine = AIWaiter(agent=self.agent, client=self.client)
 
     def ask_table(self, text='Dalawang Chicken Adobo po.'):

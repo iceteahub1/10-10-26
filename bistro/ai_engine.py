@@ -85,7 +85,7 @@ class AIWaiter:
                 con.execute('UPDATE conversation_sessions SET context_json=? WHERE session_id=?',
                             (memory.encode(stored), self.agent.session_id))
 
-    def _completed_response(self, traces, progress):
+    def _completed_response(self, traces, progress, *, inferred=True):
         """No model call is needed to explain Python's completed tool batch."""
         response = self._action_feedback(traces)
         if progress.remaining:
@@ -95,7 +95,7 @@ class AIWaiter:
         self._set_pending_question(None)
         self.last_error = None
         return {'ok': ok, 'response': response, 'source': 'application_results',
-                'inference_verified': True, 'partial_success': not ok and self._mutations_succeeded(traces),
+                'inference_verified': inferred, 'partial_success': not ok and self._mutations_succeeded(traces),
                 'order_mutation_succeeded': self._mutations_succeeded(traces),
                 'tools': traces, 'snapshot': self.snapshot()}
 
@@ -199,6 +199,21 @@ class AIWaiter:
             can_confirm = bool(CONFIRM.fullmatch(text)) and context['state'] == STATE_REVIEW
             menu = orders.browse_menu(db_path=self.agent.db_path)
             progress = RequestProgress.from_text(text, menu)
+            direct_confirmation = bool(CONFIRM.fullmatch(text))
+            if direct_confirmation and context['state'] == STATE_CONFIRMED:
+                # Read the persisted receipt; never ask the model to repeat checkout.
+                result = dispatch(self.agent, {'name': 'view_current_order',
+                                  'arguments': {'session_id': self.agent.session_id}})
+                return self._completed_response([{'call': {'name': 'view_current_order',
+                    'arguments': {'session_id': self.agent.session_id}}, 'result': result}], RequestProgress(None), inferred=False)
+            if direct_confirmation:
+                progress = RequestProgress([{'name': 'confirm_order', 'arguments': {}}])
+                if not can_confirm or not review_token:
+                    response = 'Checkout was not performed. Please request and read an order review before explicitly confirming it.'
+                    self._record('assistant', {'text': response, 'mode': 'application_prompt'})
+                    return {'ok': False, 'response': response, 'source': 'application_prompt',
+                        'partial_success': False, 'order_mutation_succeeded': False,
+                        'inference_verified': False, 'tools': [], 'snapshot': self.snapshot()}
             # Grounded facts are immutable exact strings. Qwen chooses which to present.
             evidence = factual_strings(menu)
             if 'order' in context:
@@ -217,6 +232,8 @@ class AIWaiter:
                 messages.insert(2, {'role': 'system', 'content': 'Outstanding customer request (not executed): ' + memory.encode(progress.remaining) + '. Only successful matching actions complete it; read-only cart views do not fulfill additions.'})
             seen, attempts, calls_used = set(), 0, 0
             routing_correction = False
+            needs_routing = not progress.recognized
+            routing_error = None
             while True:
                 # Recompute every request, including corrective retries, from
                 # authoritative state. Never leave obsolete schemas in history.
@@ -226,6 +243,16 @@ class AIWaiter:
                             ('Use structured calls JSON. ' if self.structured else 'Use native tool intents. ') +
                             'Only these current tools are allowed. Schemas: ' + memory.encode(tools)}
                 try:
+                    if needs_routing:
+                        routing_context = self._context()
+                        intent = self.client.classify_request(text, public_context({
+                            'state': routing_context['state'], 'order': routing_context.get('order'),
+                            'pending_question': routing_context.get('context', {}).get('pending_question'),
+                            'history': routing_context['history'][-4:]}), feedback=routing_error)
+                        progress = RequestProgress.from_routing(intent, progress)
+                        needs_routing = False
+                        messages.append({'role': 'system', 'content': 'Established request goal (not an executed action): ' + memory.encode(progress.remaining)})
+                        continue
                     msg = self.client.chat(transport_messages([*messages, protocol], structured=self.structured),
                                            None if self.structured else tools, structured=self.structured)
                     inferred = True
@@ -268,7 +295,7 @@ class AIWaiter:
                             raise ValueError('Invalid pending clarification.')
                         if routing_correction and pending is None:
                             raise ValueError('The unavailable tool selection was not corrected. Return a currently allowed intent or an explicit clarification.')
-                        if progress.remaining and (traces or any(g['name'] in MUTATIONS for g in progress.remaining)):
+                        if progress.remaining and (traces or any(g['name'] != 'browse_menu' for g in progress.remaining)):
                             if pending is None:
                                 raise ValueError('The requested operations remain unfinished; return the outstanding tool intent or ask an explicit clarification.')
                             response = (self._action_feedback(traces) + '\n' if traces else '') + progress.incomplete_feedback() + '\n' + reply
@@ -298,6 +325,8 @@ class AIWaiter:
                     messages.append({'role': 'system', 'content': 'Native tools unavailable. Use structured calls JSON with only the current allowed schemas.'})
                     continue
                 except (ValueError, KeyError, TypeError, AttributeError, IndexError, MalformedResponse) as exc:
+                    if needs_routing:
+                        routing_error = str(exc)
                     if isinstance(exc, ToolUnavailable):
                         # Python already handled table binding; a legacy model
                         # request to establish it needs no additional action.

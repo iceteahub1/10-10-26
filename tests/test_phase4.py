@@ -37,6 +37,7 @@ class Phase4Tests(unittest.TestCase):
         self.agent.execute({'action': 'establish_session', 'arguments': {'table_no': 3}})
         self.sid = self.agent.session_id
         self.client = Mock(model='qwen2.5:7b')
+        self.client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         self.ai = AIWaiter(agent=self.agent, client=self.client)
 
     def run_model(self, text, *outputs):

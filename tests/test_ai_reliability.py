@@ -31,6 +31,7 @@ class ReliabilityTests(unittest.TestCase):
         self.agent = ConversationAgent(db_path=self.db)
         self.agent.execute({'action':'establish_session','arguments':{'table_no':3}})
         self.client = Mock(model='qwen2.5:arbitrary-compatible-tag')
+        self.client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         self.ai = AIWaiter(agent=self.agent, client=self.client)
 
     def respond(self, text, *outputs):
@@ -51,6 +52,7 @@ class ReliabilityTests(unittest.TestCase):
                 agent = ConversationAgent(db_path=db)
                 agent.execute({'action':'establish_session','arguments':{'table_no':3}})
                 client = Mock(model=model)
+                client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
                 client.chat.side_effect = [native(self.add(session_id='made-up-session')), {'content':'not JSON'}, MalformedResponse('empty')]
                 result = AIWaiter(agent=agent, client=client).respond('Dalawang Chicken Adobo po.')
                 self.assertTrue(result['ok'])  # Completed action needs no model acknowledgement.
@@ -355,6 +357,7 @@ class AcceptanceScriptTests(unittest.TestCase):
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
         import verify_phase4
         client=Mock(model='qwen2.5:14b')
+        client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         client.chat.side_effect=[native(intent('add_item_to_order',item_name='Chicken Adobo',qty=2)),
                                  native(intent('view_current_order')),
                                  native(intent('request_review')),
@@ -372,6 +375,7 @@ class AcceptanceScriptTests(unittest.TestCase):
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
         import verify_phase4
         client=Mock(model='qwen2.5:3b')
+        client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         client.chat.side_effect=[native(intent('view_current_order')), {'content':''}, {'content':''}]
         with patch.object(verify_phase4,'OllamaClient',return_value=client), patch('sys.stdout',new_callable=io.StringIO) as output:
             self.assertEqual(verify_phase4.main(['--model','qwen2.5:3b']),1)

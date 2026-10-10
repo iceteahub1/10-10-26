@@ -33,6 +33,7 @@ class ToolPolicyTests(unittest.TestCase):
         initialize_database(self.db)
         self.agent = ConversationAgent(db_path=self.db)
         self.client = Mock(model='qwen2.5:any-compatible-size')
+        self.client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
         self.ai = AIWaiter(agent=self.agent, client=self.client)
 
     def bind(self):
@@ -95,6 +96,7 @@ class ToolPolicyTests(unittest.TestCase):
             with self.subTest(model=label):
                 agent = ConversationAgent(db_path=self.db)
                 client = Mock(model=label)
+                client.classify_request.return_value = 'general'  # Mock semantic routing; existing action/fault fixtures stay unchanged.
                 ai = AIWaiter(agent=agent, client=client)
                 ai.respond('Isang Garlic Rice po.')
                 client.chat.assert_not_called()
@@ -114,10 +116,10 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertTrue(result['ok'], result)
         self.assertIn('add_item_to_order', names(self.client.chat.call_args_list[0].args[1]))
         second = self.client.chat.call_args_list[1]
-        self.assertEqual(names(second.args[1]), READS)
+        self.assertEqual(names(second.args[1]), {'browse_menu'})
         schemas = [m for m in second.args[0] if 'Schemas: ' in m.get('content', '')]
         self.assertEqual(len(schemas), 1)
-        self.assertEqual(names(json.loads(schemas[0]['content'].split('Schemas: ', 1)[1])), READS)
+        self.assertEqual(names(json.loads(schemas[0]['content'].split('Schemas: ', 1)[1])), {'browse_menu'})
 
     def test_empty_cart_never_advertises_line_edits_or_checkout(self):
         self.bind()
@@ -147,7 +149,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.bind()
         self.add()
         progress = RequestProgress([{'name': 'browse_menu', 'arguments': {}}])
-        self.assertEqual(names(self.tools(progress)), READS)
+        self.assertEqual(names(self.tools(progress)), {'browse_menu'})
 
     def test_review_tools_require_cart_prior_review_and_direct_consent(self):
         self.bind()
