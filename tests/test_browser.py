@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from http.cookiejar import CookieJar
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import hashlib
 from pathlib import Path
@@ -29,6 +30,16 @@ class BrowserTests(unittest.TestCase):
         self.db = Path(self.temp.name) / 'restaurant.db'
         sock = socket.socket(); sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]; sock.close()
         self.settings = replace(load_settings(), port=port)
+        model = self.settings.model
+        class TagsHandler(BaseHTTPRequestHandler):
+            def do_GET(inner):
+                inner.send_response(200); inner.send_header('Content-Type', 'application/json'); inner.end_headers()
+                inner.wfile.write(json.dumps({'models': [{'name': model}]}).encode())
+            def log_message(inner, *args):
+                pass
+        self.ollama = ThreadingHTTPServer(('127.0.0.1', 0), TagsHandler)
+        self.ollama_thread = threading.Thread(target=self.ollama.serve_forever, daemon=True); self.ollama_thread.start()
+        self.settings = replace(self.settings, ollama_url=f'http://127.0.0.1:{self.ollama.server_port}')
         self.client = Mock(model=self.settings.model)
         self.client.classify_request.return_value = 'general'
         self.app = create_app(settings=self.settings, db_path=self.db, client_factory=lambda: self.client, acceptance_log_path=Path(self.temp.name)/'acceptance.jsonl')
@@ -45,7 +56,7 @@ class BrowserTests(unittest.TestCase):
         self.addCleanup(self.cleanup)
 
     def cleanup(self):
-        self.server.should_exit = True; self.thread.join(5); self.temp.cleanup()
+        self.server.should_exit = True; self.thread.join(5); self.ollama.shutdown(); self.ollama.server_close(); self.temp.cleanup()
 
     def new_browser(self):
         jar = CookieJar()
@@ -285,6 +296,33 @@ class BrowserTests(unittest.TestCase):
         self.add(); self.assertTrue(self.confirm(self.review())[1]['ok'])
         self.assertTrue(self.request('session')[1]['order']['receipt_id'])
         self.assertFalse(self.request('acceptance-report')[1]['logging_available'])
+
+    def test_live_ollama_disconnect_reconnect_and_offline_checkout(self):
+        self.start()
+        self.assertTrue(self.request('ai-status')[1]['available'])
+        self.ollama.shutdown(); self.ollama.server_close()
+        offline = self.request('ai-status')[1]
+        self.assertFalse(offline['available']); self.assertEqual(offline['code'], 'ollama_unavailable')
+        self.assertEqual(offline['endpoint'], self.settings.ollama_url)
+        self.assertEqual(self.request('chat', {'message': 'Dalawang Chicken Adobo po.'})[0], 503)
+        self.client.chat.assert_not_called()
+        self.add(); self.assertTrue(self.confirm(self.review())[1]['ok'])
+        handler = self.ollama.RequestHandlerClass
+        self.ollama = ThreadingHTTPServer(('127.0.0.1', int(self.settings.ollama_url.rsplit(':', 1)[1])), handler)
+        self.ollama_thread = threading.Thread(target=self.ollama.serve_forever, daemon=True); self.ollama_thread.start()
+        self.assertTrue(self.request('ai-status')[1]['available'])
+        self.start(4)
+        self.client.chat.return_value = {'role': 'assistant', 'content': '', 'tool_calls': [{'function': {'name': 'add_item_to_order', 'arguments': {'item_name': 'Chicken Adobo', 'qty': 1, 'instructions': ''}}}]}
+        self.assertTrue(self.request('chat', {'message': "I'd like one Chicken Adobo."})[1]['ok'])
+
+    def test_reachable_tags_but_unreachable_model_never_fabricates_chat(self):
+        self.start(); self.api.client_factory = None
+        self.assertTrue(self.request('ai-status')[1]['available'])
+        result = self.request('chat', {'message': 'Dalawang Chicken Adobo po.'})[1]
+        self.assertFalse(result['ok']); self.assertEqual(result['code'], 'ai_unavailable')
+        self.assertEqual(result['snapshot']['order']['items'], [])
+        self.assertIn('No new order changes', result['message'])
+        self.client.chat.assert_not_called()
 
     def test_ai_missing_disabled_and_bad_status(self):
         self.api.client_factory = None

@@ -179,3 +179,33 @@ Follow-up validation: all 3 Chromium regressions passed (offline checkout, stall
 AI recheck recovery, and preserved AI mode). The focused API/log tests passed
 before a single complete regression run. Real Windows/Ollama retesting remains
 required using the checklist above.
+
+### Live Ollama connectivity follow-up
+
+Every enabled-AI status check now probes the configured local `/api/tags` endpoint,
+including when a test inference client is injected; client injection no longer
+implies availability. Saved model preferences and launcher environment flags are
+not used as evidence of connectivity. The status banner includes the actual
+endpoint: compare Windows `curl` results against that address, especially when
+`BISTRO_OLLAMA_URL` selects a custom port. The existing launcher may automatically
+start Ollama, so check the process/endpoint after launching as well as beforehand.
+
+The browser rechecks every 15 seconds, on window focus/visibility, and on **Check
+again**. Older overlapping probes cannot overwrite a newer result. Status means
+Ollama answered the live model-list request and lists the selected model; it does
+not guarantee inference success. Fresh chat checks availability again, and actual
+model-request failures remain errors with no fabricated success or new cart
+mutation. Previously saved transcripts/cached request results remain historical
+results; their display is not evidence of current inference.
+
+Regression coverage uses a disposable live HTTP endpoint to test available →
+unreachable → reconnected, verifies injected inference cannot bypass offline
+status, completes offline deterministic checkout, and rejects a failed real model
+request even when the model-list endpoint answers. Chromium checks cover manual
+rechecking/reconnection and out-of-order status responses. No FSM, ordering,
+SQLite, receipt, or session authorization code was changed.
+
+Connectivity validation: 22 focused API tests and 4 Chromium checks passed.
+Complete pinned-environment discovery ran 261 tests: 260 passed and the existing
+PowerShell-only test was skipped. Real Windows/Ollama verification still requires
+the documented manual checks.

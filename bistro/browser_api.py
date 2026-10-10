@@ -119,9 +119,7 @@ class BrowserAPI:
         return status
 
     def _ai_status(self):
-        base = {'available': False, 'model': self.settings.model}
-        if self.client_factory:
-            return {**base, 'available': True, 'code': 'ready', 'message': 'AI available.'}
+        base = {'available': False, 'model': self.settings.model, 'endpoint': self.settings.ollama_url}
         if not self.settings.ai_enabled:
             return {**base, 'code': 'ai_disabled', 'message': 'AI is disabled. Use configure_ai.bat to enable it.'}
         try:

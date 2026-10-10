@@ -2,6 +2,9 @@
 from dataclasses import replace
 from pathlib import Path
 import socket
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import sys
 import tempfile
 from unittest.mock import Mock
@@ -23,6 +26,15 @@ with tempfile.TemporaryDirectory() as folder:
     client.chat.return_value = {'role': 'assistant', 'content': '', 'tool_calls': [{'function': {
         'name': 'add_item_to_order', 'arguments': {'item_name': 'Chicken Adobo', 'qty': 2, 'instructions': ''}}}]}
     kwargs = {'client_factory': lambda: client} if '--ai' in sys.argv else {}
+    if '--ai' in sys.argv:
+        class TagsHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.end_headers()
+                self.wfile.write(json.dumps({'models': [{'name': settings.model}]}).encode())
+            def log_message(self, *args):
+                pass
+        tags = ThreadingHTTPServer(('127.0.0.1', offline_port), TagsHandler)
+        threading.Thread(target=tags.serve_forever, daemon=True).start()
     app = create_app(settings=settings, db_path=Path(folder)/'restaurant.db', acceptance_log_path=Path(folder)/'acceptance.jsonl', **kwargs)
     print(f'http://127.0.0.1:{port}', flush=True)
     uvicorn.run(app, host='127.0.0.1', port=port, log_level='critical')

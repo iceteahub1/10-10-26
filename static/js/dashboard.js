@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let snapshot = {state: 'STATE_GREETING', order: null, messages: []}, menu = [], category = 'All', busy = false, aiAvailable = false;
-let pending = null;
+let pending = null, aiCheckSequence = 0;
 try { pending = JSON.parse(sessionStorage.getItem('bistro_pending') || 'null'); } catch (_) {}
 function node(tag, text, cls) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; }
 const money = cents => new Intl.NumberFormat('en-PH', {style: 'currency', currency: 'PHP'}).format(cents / 100);
@@ -126,13 +126,14 @@ function showAI(available, message, model = '') {
   updateControls();
 }
 async function checkAI() {
+  const sequence = ++aiCheckSequence;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const status = await get('ai-status', {signal: controller.signal});
-    showAI(status.available, status.message, status.model);
+    if (sequence === aiCheckSequence) showAI(status.available, status.message + ' (' + status.endpoint + ')', status.model);
   } catch (_) {
-    showAI(false, 'Could not check local Ollama.');
+    if (sequence === aiCheckSequence) showAI(false, 'Could not check local Ollama.');
   } finally { clearTimeout(timeout); }
 }
 $('table-form').onsubmit = event => { event.preventDefault(); sendRequest('session', {table_no: Number($('table-no').value)}); };
@@ -150,3 +151,8 @@ for (const id of ['refresh-menu', 'refresh-cart']) $(id).onclick = () => refresh
 document.querySelectorAll('[data-panel]').forEach(button => button.onclick = () => selectPanel(button.dataset.panel));
 $('retry-box').hidden = !pending;
 Promise.all([refresh(), checkAI()]).catch(error => notify(error.message + ' Try Refresh.', true));
+
+// Recheck a live connection; saved preferences and an earlier ready result are not health checks.
+setInterval(checkAI, 15000);
+window.addEventListener('focus', checkAI);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkAI(); });

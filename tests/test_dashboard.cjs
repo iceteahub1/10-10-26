@@ -75,3 +75,28 @@ test('AI mode still sends to the shared engine and synchronizes the cart', {time
   assert.equal(await page.locator('#cart-items').getByLabel('Quantity of Chicken Adobo').inputValue(), '2');
   assert(await page.getByRole('button', {name: 'Add Chicken Adobo to order'}).isEnabled());
 });
+
+test('Check again reprobes connectivity, reconnects, and ignores an older ready response', {timeout: 30000}, async t => {
+  const {page, url} = await setup(t);
+  await start(page, url);
+  await page.waitForFunction(() => document.querySelector('#ai-status').textContent.includes('AI unavailable'));
+  const endpoint = 'http://127.0.0.1:11434';
+  let release; const delayed = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  await page.route('**/api/ai-status', async route => {
+    const call = ++calls;
+    if (call === 1) await delayed;
+    await route.fulfill({contentType: 'application/json', body: JSON.stringify({available: call !== 2, message: call === 2 ? 'Cannot reach Ollama.' : 'Local AI is ready.', model: 'qwen2.5:3b', endpoint})}).catch(() => {});
+  });
+  t.after(() => release());
+  await page.getByRole('button', {name: 'Check again'}).click();
+  await page.getByRole('button', {name: 'Check again'}).click();
+  await page.waitForFunction(() => document.querySelector('#ai-status').textContent.includes('Cannot reach Ollama'));
+  release(); await page.waitForTimeout(100);
+  assert.match(await page.locator('#ai-status').textContent(), /AI unavailable/);
+  assert(await page.getByRole('button', {name: 'Add Chicken Adobo to order'}).isEnabled());
+  await page.getByRole('button', {name: 'Check again'}).click();
+  await page.waitForFunction(() => !document.querySelector('#send').disabled);
+  assert.match(await page.locator('#ai-status').textContent(), /AI available/);
+  assert(calls >= 3);
+});
