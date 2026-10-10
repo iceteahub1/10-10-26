@@ -1,0 +1,1 @@
+-- Required schema deliverable reserved for Phase 2. No database operations yet.
