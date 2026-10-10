@@ -1,11 +1,31 @@
 # Perpetual Bistro AI Virtual Waiter
 
-Phase 2 adds a real SQLite menu, persistent table sessions, editable carts,
-transaction-safe checkout, and itemized receipts to the working Phase 1 setup,
-launcher, configuration, and responsive infrastructure dashboard. FSM and AI
-conversation remain deferred to Phase 3. The dashboard still shows infrastructure
-status; ordering is currently available through the Python service API.
-See [Phase 2 usage and validation](docs/phase2-validation.md).
+Phase 3 adds a deterministic five-state ordering controller, SQLite conversation
+memory, and a working JSON-action terminal CLI to the existing Phase 1 dashboard
+and Phase 2 transactional order services. AI/model routing is deferred to Phase 4.
+See [Phase 3 architecture, commands, migrations, and validation](docs/phase3-validation.md)
+and [Phase 2 service usage](docs/phase2-validation.md).
+
+## Terminal ordering (Phase 3)
+
+After dependencies are installed, run `.venv\Scripts\python.exe virtual_waiter_prototype.py`
+on Windows or `.venv/bin/python virtual_waiter_prototype.py` on Linux. The CLI
+initializes/migrates SQLite without requiring Ollama. Use `--db PATH` for a separate
+lab database. Enter `help` for all actions, `state` for persistent context, and
+`quit` to preserve the session. Example inputs:
+
+```jsonl
+{"action":"establish_session","arguments":{"table_no":3}}
+{"action":"browse_menu","arguments":{"category":"Mains"}}
+{"action":"add_item","arguments":{"item_name":"Chicken Adobo","qty":2,"instructions":"less salt"}}
+{"action":"request_review","arguments":{}}
+{"action":"confirm_order","arguments":{"confirmed":true}}
+```
+
+Resume with the same table and optional printed session ID. After confirmation or
+cancellation, `new_session` starts a separate customer context. Cart edits invalidate
+review; confirmation requires a fresh review of the unchanged cart. Commands are
+explicit structured inputs; this CLI does not yet interpret natural language.
 
 ## Windows 10/11 installation
 
@@ -22,7 +42,7 @@ See [Phase 2 usage and validation](docs/phase2-validation.md).
    not prove your hardware can run inference; that is tested in a later phase.
 6. Successful setup prints `SUCCESS: Phase 1 environment ready`.
 
-Setup creates data/log/runtime directories and safely initializes
+Setup creates data/log/runtime directories and safely initializes/migrates
 `data/restaurant.db` after prerequisite checks pass. The menu is seeded once.
 Repeated setup preserves menu edits, stock, sessions, carts, and receipts.
 Unknown existing schemas are rejected without deleting or resetting records.
@@ -52,7 +72,7 @@ setup.bat --pull-model
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The CLI currently reports Phase 1 status; it does not accept orders yet.
+The CLI supports deterministic ordering and persistent session resumption.
 `--check` requires an already running Ollama and starts no services.
 
 ## Configuration and paths
@@ -107,7 +127,8 @@ No paid cloud AI dependency or secret is required.
 ## Structure and scope
 
 `bistro/` contains shared paths/configuration, SQLite initialization, session
-persistence, and the ordering service; AI/FSM modules remain reserved.
+persistence, the ordering service, and conversation memory; `fsm_agent.py` controls the FSM.
+AI integration remains reserved for Phase 4.
 `scripts/` implements setup and process launching. `app.py`, `templates/`, and
 `static/` provide only the Phase 1 dashboard. `seed/`, `docs/`, and `tests/` hold
 future supporting assets. Generated databases, caches, logs, `.venv`, and secret
