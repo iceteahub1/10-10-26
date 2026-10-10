@@ -49,9 +49,17 @@ class AIWaiter:
         if not 1 <= max_calls <= 16 or not 0 <= retries <= 2:
             raise ValueError('Invalid AI loop limits.')
         self.agent = agent or ConversationAgent()
-        self.client = client or OllamaClient()
+        if client is None:
+            from bistro.config import load_settings
+            settings = load_settings()
+            if not settings.ai_enabled:
+                raise OllamaError('AI is disabled. Double-click configure_ai.bat to enable it.')
+            self.client = OllamaClient(settings.ollama_url, settings.model)
+            self.structured = settings.ai_transport == 'structured'
+        else:
+            self.client = client
+            self.structured = False
         self.max_calls, self.retries = max_calls, retries
-        self.structured = False
         self.lock = threading.Lock()
         self.greeting_history = []
         self.last_error = None

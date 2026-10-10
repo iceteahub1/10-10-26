@@ -47,20 +47,25 @@ def main():
     url = f"http://{settings.host}:{settings.port}"
     token = uuid.uuid4().hex
     try:
-        try:
-            tags, ollama_process = ensure_ollama(settings, start=not args.check)
-        except RuntimeError as exc:
-            raise PrerequisiteError(str(exc)) from exc
-        if not has_model(tags, settings.model):
-            raise PrerequisiteError(f"Missing {settings.model}. Run setup.bat; startup never downloads models.")
+        ai_available = False
+        reason = 'AI disabled in local configuration.'
+        if settings.ai_enabled:
+            try:
+                tags, ollama_process = ensure_ollama(settings, start=not args.check)
+                ai_available = has_model(tags, settings.model)
+                reason = 'Selected model available.' if ai_available else f'Selected model {settings.model} is missing; no other model was substituted.'
+            except (RuntimeError, OSError, ValueError) as exc:
+                reason = str(exc)
+        print(('AI model available: ' + settings.model if ai_available else 'AI chat unavailable: ' + reason))
+        print('Browser dashboard has no AI chat. Use ordering.bat for deterministic ordering; configure_ai.bat to enable/change AI; ai_chat.bat for terminal AI.')
         if args.check:
-            print("Setup, imports, Ollama API, and exact model tag checks passed.")
+            print('Core setup and imports passed. Non-AI mode is available.')
             return 0
         with socket.socket() as sock:
             if sock.connect_ex((settings.host, settings.port)) == 0:
                 raise RuntimeError(f"Port {settings.port} is occupied. Close the existing application or change BISTRO_PORT. No process was terminated.")
         with (LOGS / "application.log").open("ab") as log:
-            app_process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app:app", "--host", settings.host, "--port", str(settings.port)], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env={**os.environ, "BISTRO_LAUNCH_TOKEN": token})
+            app_process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app:app", "--host", settings.host, "--port", str(settings.port)], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env={**os.environ, "BISTRO_LAUNCH_TOKEN": token, "BISTRO_AI_AVAILABLE": "1" if ai_available else "0", "BISTRO_AI_REASON": reason})
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if app_process.poll() is not None:

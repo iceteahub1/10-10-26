@@ -73,13 +73,25 @@ def ensure_ollama_installed():
 
 
 def install_dependencies():
-    print('Installing required libraries...')
-    print('This step may download pinned libraries from PyPI; internet is needed the first time.')
-    if not confirm('Allow installation of the pinned application libraries into this project environment?'):
+    from download_policy import dependency_plan, approve_download
+    import tempfile
+    print('Checking pinned library download sizes from official PyPI metadata...')
+    try:
+        size, manifest = dependency_plan(ROOT / 'requirements.txt')
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # Fail closed: do not run pip with an unverified or unbounded plan.
+        raise RuntimeError('Library download sizes/source hashes could not be verified. Check internet and rerun setup. No downloads were started.') from exc
+    required = size * 3 + 100_000_000 if size is not None else None
+    if not approve_download('Required pinned libraries', size, required,
+                            optional=False, confirm=confirm, location=ROOT):
         raise RuntimeError('Library installation was declined. Double-click setup.bat when ready.')
     try:
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check',
-                        '-r', str(ROOT / 'requirements.txt')], check=True, cwd=ROOT)
+        with tempfile.TemporaryDirectory(prefix='bistro-libraries-') as folder:
+            locked = Path(folder) / 'verified-requirements.txt'
+            locked.write_text(manifest, encoding='utf-8')
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check',
+                            '--no-deps', '--only-binary=:all:', '--require-hashes',
+                            '-r', str(locked)], check=True, cwd=ROOT)
         verify_libraries(ROOT / 'requirements.txt')
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError('Required libraries could not be installed. Check your internet connection and the pip message above, then rerun setup.bat. No restaurant records were removed.') from exc
@@ -117,30 +129,13 @@ def main():
     from bistro.paths import prepare_directories
     prepare_directories()
     settings = load_settings()
-    print('Checking Ollama...')
-    ensure_ollama_installed()
-    owned = None
-    try:
-        tags, owned = ensure_ollama(settings)
-        print('Preparing AI model...')
-        if not has_model(tags, settings.model):
-            print(f"Missing model: {settings.model}. The default 7B model downloads about 4.7 GB; allow at least 6 GB free storage. Other tags vary. Internet is required for this download.")
-            pull = confirm(f'Download {settings.model} now?' + (' (--pull-model requested)' if args.pull_model else ''))
-            if not pull:
-                raise RuntimeError("Model download was declined. Double-click setup.bat when ready and approve the model download.")
-            try:
-                subprocess.run([ollama_executable(), "pull", settings.model], check=True, env={**os.environ, "OLLAMA_HOST": settings.ollama_url})
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise RuntimeError('AI model download failed. Check internet/free disk space, then double-click setup.bat to retry. Existing orders are preserved.') from exc
-            if not has_model(local_json(settings.ollama_url + "/api/tags"), settings.model):
-                raise RuntimeError("Model download finished but exact tag is unavailable.")
-        from bistro.database import initialize_database
-        initialize_database(ROOT / "data" / "restaurant.db")
-        MARKER.write_text(json.dumps({"root": str(ROOT), "requirements": fingerprint(), "python": sys.version.split()[0]}, indent=2), encoding="utf-8")
-        print("Installation complete! Double-click run.bat to open the dashboard.")
-        print("Existing restaurant records, receipts and inventory were preserved.")
-    finally:
-        stop_owned(owned)
+    from configure_ai import configure
+    configure(settings)
+    from bistro.database import initialize_database
+    initialize_database(ROOT / "data" / "restaurant.db")
+    MARKER.write_text(json.dumps({"root": str(ROOT), "requirements": fingerprint(), "python": sys.version.split()[0]}, indent=2), encoding="utf-8")
+    print("Installation complete! Double-click run.bat to open the dashboard.")
+    print("Existing restaurant records, receipts and inventory were preserved.")
     return 0
 
 if __name__ == "__main__":

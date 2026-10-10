@@ -20,7 +20,7 @@ import launch_application as launch
 
 class ConfigurationTests(unittest.TestCase):
     def settings(self, **values):
-        with patch('bistro.config.load_dotenv'), patch.dict(os.environ, values, clear=True):
+        with patch('bistro.config.read_preferences', return_value=None), patch('bistro.config.load_dotenv'), patch.dict(os.environ, values, clear=True):
             return load_settings()
 
     def test_defaults(self):
@@ -72,7 +72,7 @@ class PrerequisiteTests(unittest.TestCase):
             root=Path(folder); (root/'requirements.txt').write_text('')
             (root/'data').mkdir(); database=root/'data/restaurant.db'; database.write_bytes(b'existing data')
             marker=root/'runtime/setup.json'; marker.parent.mkdir(); marker.write_text('{}')
-            with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), patch.object(setup, 'require_venv'), patch.object(setup.subprocess, 'run'), patch.object(setup, 'confirm', return_value=True), patch.object(setup, 'ensure_ollama_installed'), patch.object(setup, 'ensure_ollama', side_effect=RuntimeError('missing Ollama')), patch('sys.argv', ['setup','--inside']):
+            with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), patch.object(setup, 'require_venv'), patch.object(setup.subprocess, 'run'), patch.object(setup, 'confirm', return_value=True), patch('configure_ai.configure', return_value=False), patch('bistro.database.initialize_database', side_effect=RuntimeError('database failure')), patch('sys.argv', ['setup','--inside']):
                 with self.assertRaises(RuntimeError):
                     setup.main()
             self.assertEqual(database.read_bytes(), b'existing data')

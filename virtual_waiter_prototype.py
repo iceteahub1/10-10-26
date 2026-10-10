@@ -51,10 +51,13 @@ def main(argv=None, *, get_input=input, send_output=print):
             if not result['ok']:
                 raise ValueError(result['message'])
         if args.ai:
+            if not settings.ai_enabled:
+                raise ValueError('AI chat unavailable: AI is disabled. Double-click configure_ai.bat to enable it, or ordering.bat for non-AI ordering.')
             from bistro.ai_engine import AIWaiter
             from bistro.ollama_client import OllamaClient
             ai = AIWaiter(agent=agent, client=OllamaClient(settings.ollama_url, settings.model,
                           os.getenv('BISTRO_OLLAMA_TIMEOUT', '120')))
+            ai.structured = settings.ai_transport == 'structured'
             send_output('AI mode: local Ollama / ' + settings.model + '. Type ordinary messages; quit preserves your session. Explicit checkout: Yes, confirm my order.')
         else:
             show_help(send_output)
