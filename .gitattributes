@@ -1,0 +1,2 @@
+# Store normalized batch scripts and check them out with Windows line endings.
+*.bat text eol=crlf

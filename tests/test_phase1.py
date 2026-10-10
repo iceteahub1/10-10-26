@@ -72,7 +72,7 @@ class PrerequisiteTests(unittest.TestCase):
             root=Path(folder); (root/'requirements.txt').write_text('')
             (root/'data').mkdir(); database=root/'data/restaurant.db'; database.write_bytes(b'existing data')
             marker=root/'runtime/setup.json'; marker.parent.mkdir(); marker.write_text('{}')
-            with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), patch.object(setup, 'require_venv'), patch.object(setup.subprocess, 'run'), patch.object(setup, 'ensure_ollama', side_effect=RuntimeError('missing Ollama')), patch('sys.argv', ['setup','--inside']):
+            with patch.object(setup, 'ROOT', root), patch.object(setup, 'MARKER', marker), patch.object(setup, 'require_venv'), patch.object(setup.subprocess, 'run'), patch.object(setup, 'confirm', return_value=True), patch.object(setup, 'ensure_ollama_installed'), patch.object(setup, 'ensure_ollama', side_effect=RuntimeError('missing Ollama')), patch('sys.argv', ['setup','--inside']):
                 with self.assertRaises(RuntimeError):
                     setup.main()
             self.assertEqual(database.read_bytes(), b'existing data')

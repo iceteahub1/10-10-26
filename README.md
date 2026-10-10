@@ -49,53 +49,94 @@ Resume with the same table and optional printed session ID. After confirmation o
 cancellation, `new_session` starts a separate customer context. Cart edits invalidate
 review; confirmation requires a fresh review of the unchanged cart. Commands in this default mode are explicit structured inputs; `--ai` enables natural-language model routing.
 
-## Windows 10/11 installation
+## Easy installation for Windows 10/11 (Intel/AMD 64-bit)
 
-1. Place the project in a writable folder. Paths containing spaces are supported
-   by design; avoid protected locations such as Program Files.
-2. Install **64-bit CPython 3.11 or 3.12** from
-   https://www.python.org/downloads/windows/. Include the Python launcher.
-3. Install Ollama from https://ollama.com/download/windows and launch it.
-4. Double-click `setup.bat`. It detects Python, creates `.venv`, installs exact
-   pinned dependencies, checks package consistency, and checks local Ollama.
-5. The default exact model is `qwen2.5:7b`. Setup offers to download a missing
-   model, or you can run `ollama pull qwen2.5:7b` yourself and rerun setup.
-   Downloads require internet and several GB of storage. Model presence does
-   not prove your hardware can run inference; run the Phase 4 real smoke test locally.
-6. Successful setup prints `SUCCESS: Phase 1 environment ready`.
+You do not need to type commands, edit PATH, or activate a Python environment.
 
-Setup creates data/log/runtime directories and safely initializes/migrates
-`data/restaurant.db` after prerequisite checks pass. The menu is seeded once.
-Repeated setup preserves menu edits, stock, sessions, carts, and receipts.
-Unknown existing schemas are rejected without deleting or resetting records.
-Repeated setup reuses a validated environment. An invalid or moved environment
-can be archived with your consent; no application data is removed.
+1. Download/extract the whole project ZIP into a writable folder such as Documents.
+   Do not run the files inside the ZIP. Keep the project files together.
+2. Double-click **setup.bat**. Keep its window open and read each permission prompt.
+3. Setup looks for **64-bit Python 3.12 or 3.11**, preferring 3.12. It checks the
+   registry, normal installation folders, available launchers, and every PATH
+   candidate. Python 3.13, 32-bit Python and Store shortcuts are not selected.
+4. If compatible Python is missing, type **y** when offered its installation.
+   Setup downloads official Python **3.12.10 x64** over HTTPS from python.org,
+   verifies its Windows signature and Python Software Foundation publisher, and
+   installs it in a dedicated folder under your Windows account. Existing Python
+   installations are not overwritten; global PATH and file associations are not
+   changed, and another Python launcher is not installed.
+5. Approve installation of the required libraries when asked. They are installed
+   into this project's `.venv`. If that environment is broken or copied, setup
+   offers to keep it as a backup and create a fresh one. **Restaurant data is kept.**
+6. If Ollama is missing, approve opening its **official download page**, then click
+   the Windows download and finish that installer. Return to the setup window and
+   press Enter. Setup automatically detects Ollama again and checks its service.
+7. Approve the exact configured Qwen model download. The default `qwen2.5:7b`
+   downloads about **4.7 GB**; allow at least **6 GB free storage** for it, plus
+   space for Python/libraries. Internet is needed for initial downloads. Other
+   Qwen tags have different sizes. Model presence does not prove sufficient RAM/VRAM.
+8. Wait for **Installation complete!** Then double-click **run.bat**. The existing
+   dashboard opens in your default browser. Keep the launcher window open;
+   press **Ctrl+C** there when finished.
 
-## One-click startup
+Permission prompts default to **No**. Declining safely stops that step; rerun
+`setup.bat` when ready. Setup never deletes SQLite records, receipts, or inventory.
+Normally no administrator account is needed. Only a prerequisite's official
+installer or your organization's Windows policy may require extra permission.
 
-Double-click `run.bat`. It uses `.venv\Scripts\python.exe` without activation,
-checks setup/imports and the exact model, reuses running Ollama or starts it if
-needed, starts the local dashboard, and opens the default browser after readiness.
-Keep the console open. Press **Ctrl+C** to stop; the launcher only stops processes
-it started. Startup never downloads a model. Closing the console forcibly is
-not a reliable cleanup method; use Ctrl+C.
+The automatic Python release is pinned because 3.12.10 is the last official
+Python 3.12 Windows installer release. Already installed compatible later 3.12
+builds are accepted after probing. Windows validates the installer file digest,
+trusted certificate chain and expected signed publisher; verification failure
+stops installation. Python 3.13 may remain installed alongside the application.
+The existing `py` launcher's own automatic version selection may discover the
+new installation; application startup always uses the verified project `.venv`.
 
-The launcher refuses an occupied dashboard port instead of killing another
-application. Logs are in `logs/application.log` and `logs/ollama.log`.
-Failure messages remain visible because both batch files pause before exiting.
+After successful setup, **run.bat** performs offline checks of the environment,
+setup record and pinned libraries. It offers setup if they are missing or broken,
+and offers repair for missing Ollama/model prerequisites. Unchanged completed
+setup reuses installed libraries and models without repeating downloads. One
+project can have only one setup/launcher window running at a time. Occupied ports
+are reported; unrelated applications are never terminated.
 
-Optional commands from CMD in the project folder:
+The dashboard remains the existing dashboard. Phase 4 AI conversation is available
+through its documented CLI; this installer change does not build the Phase 5 UI.
+
+### If something goes wrong
+
+- **Download failed:** check internet and free disk space, then double-click setup
+  again. Keep the whole project folder; do not remove `data`.
+- **Python signature failed:** check Windows date/time and Windows certificate
+  updates. Retry later or ask your group lead; setup will not run an unverified installer.
+- **Python dedicated folder is incomplete:** ask your group lead to repair that
+  installation. Setup refuses to overwrite an existing unverified Python folder.
+- **Copied/broken environment:** approve the `.venv` backup/recreation prompt.
+  Copying the source/database is supported; reusing a copied `.venv` is not.
+- **Ollama still missing:** finish its official Windows installer and rerun setup.
+- **Model download interrupted:** rerun setup and approve that download again.
+  The exact configured model is checked after the download finishes.
+- **Already running / port occupied:** return to the existing application window,
+  or close it normally. Setup never kills another application's process.
+- **Windows blocks PowerShell:** ask your group lead or IT. The batch files use a
+  process-local execution-policy setting and do not change system policy; managed
+  Windows policies can still block scripts.
+- **Model too slow / out of memory:** close competing applications and check
+  Ollama logs. Choosing another exact Qwen2.5 tag requires explicit configuration
+  and local validation; setup never silently replaces the model.
+
+Advanced checks (optional; group leads only):
 
 ```bat
 run.bat --check
 run.bat --no-browser
 setup.bat --pull-model
-.venv\Scripts\python.exe virtual_waiter_prototype.py
 .venv\Scripts\python.exe -m unittest discover -s tests -v
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test_windows_bootstrap.ps1
 ```
 
-The CLI supports deterministic ordering and persistent session resumption.
-`--check` requires an already running Ollama and starts no services.
+`--pull-model` still asks for download permission. `--check` requires a running
+Ollama service and starts no services after prerequisite checks.
+See [installer design, test results and Windows acceptance checklist](docs/installer-validation.md).
 
 ## Configuration and paths
 
