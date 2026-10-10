@@ -75,3 +75,24 @@ def stop_owned(process):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+
+def verify_libraries(requirements=None):
+    """Check installed versions against active pinned requirements, entirely offline."""
+    from importlib.metadata import version, PackageNotFoundError
+    from pip._vendor.packaging.requirements import Requirement
+    path = Path(requirements) if requirements is not None else ROOT / 'requirements.txt'
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        requirement = Requirement(line)
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        try:
+            installed = version(requirement.name)
+        except PackageNotFoundError as exc:
+            raise RuntimeError('Required library missing: ' + requirement.name + '. Rerun setup.bat.') from exc
+        if installed not in requirement.specifier:
+            raise RuntimeError('Required library version mismatch: ' + requirement.name + '. Rerun setup.bat.')
+    subprocess.run([sys.executable, '-m', 'pip', 'check'], check=True, capture_output=True)

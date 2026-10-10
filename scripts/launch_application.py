@@ -9,8 +9,12 @@ import sys
 import time
 import uuid
 import webbrowser
-from common import ROOT, MARKER, require_venv, local_json, ensure_ollama, has_model, stop_owned
+from common import ROOT, MARKER, require_venv, local_json, ensure_ollama, has_model, stop_owned, verify_libraries
 sys.path.insert(0, str(ROOT))
+
+class PrerequisiteError(RuntimeError):
+    """Exit code 2 lets the Windows bootstrap offer prerequisite repair."""
+
 
 def check_setup():
     require_venv()
@@ -20,14 +24,21 @@ def check_setup():
     digest = hashlib.sha256((ROOT / "requirements.txt").read_bytes()).hexdigest()
     if state.get("root") != str(ROOT) or state.get("requirements") != digest:
         raise RuntimeError("Project moved or dependencies changed. Rerun setup.bat.")
+    origin = ROOT / '.venv' / '.bistro-root'
+    if not origin.is_file() or origin.read_text(encoding='utf-8') != str(ROOT):
+        raise RuntimeError('Application environment was moved or copied. Rerun setup.bat.')
+    verify_libraries()
     import fastapi, uvicorn, dotenv
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--check", action="store_true", help="Check setup and prerequisites without starting services")
+    parser.add_argument('--check-setup', action='store_true', help='Check only application environment; no services or downloads')
     args = parser.parse_args()
     check_setup()
+    if args.check_setup:
+        return 0
     from bistro.config import load_settings
     from bistro.paths import prepare_directories, LOGS
     settings = load_settings()
@@ -36,9 +47,12 @@ def main():
     url = f"http://{settings.host}:{settings.port}"
     token = uuid.uuid4().hex
     try:
-        tags, ollama_process = ensure_ollama(settings, start=not args.check)
+        try:
+            tags, ollama_process = ensure_ollama(settings, start=not args.check)
+        except RuntimeError as exc:
+            raise PrerequisiteError(str(exc)) from exc
         if not has_model(tags, settings.model):
-            raise RuntimeError(f"Missing {settings.model}. Run setup.bat; startup never downloads models.")
+            raise PrerequisiteError(f"Missing {settings.model}. Run setup.bat; startup never downloads models.")
         if args.check:
             print("Setup, imports, Ollama API, and exact model tag checks passed.")
             return 0
@@ -78,4 +92,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as exc:
         print(f"STARTUP FAILED: {exc}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2 if isinstance(exc, PrerequisiteError) else 1)

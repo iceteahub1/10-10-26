@@ -1,27 +1,14 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-py -3.12 "%~dp0scripts\setup_environment.py" --probe >nul 2>&1
-if not errorlevel 1 goto py312
-py -3.11 "%~dp0scripts\setup_environment.py" --probe >nul 2>&1
-if not errorlevel 1 goto py311
-python "%~dp0scripts\setup_environment.py" --probe >nul 2>&1
-if not errorlevel 1 goto python
- echo ERROR: Install 64-bit Python 3.11 or 3.12 from https://www.python.org/downloads/windows/
- echo Enable the Python launcher during installation.
+if not exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" (
+ echo Windows PowerShell is missing. Ask your group lead to repair Windows PowerShell.
  pause
  exit /b 1
-:py312
-py -3.12 "%~dp0scripts\setup_environment.py" %*
-goto done
-:py311
-py -3.11 "%~dp0scripts\setup_environment.py" %*
-goto done
-:python
-python "%~dp0scripts\setup_environment.py" %*
-:done
+)
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows_bootstrap.ps1" -Mode Setup %*
 set "RESULT=%ERRORLEVEL%"
 echo.
-if not "%RESULT%"=="0" echo Setup did not complete. Read the error above.
+if not "%RESULT%"=="0" echo Read the message above, then retry. Your restaurant data has not been deleted.
 pause
 exit /b %RESULT%
